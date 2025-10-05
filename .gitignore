@@ -1,0 +1,12 @@
+*.o
+*.so
+*.a
+*.out
+*.bin
+*.exe
+
+compile_commands.json
+build/
+.cache/
+vgcore.*
+
