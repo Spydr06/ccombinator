@@ -26,9 +26,10 @@
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
-enum parser_type : uint8_t {
+enum parser_type : uint16_t {
     PARSER_UNDEFINED = 0,
     PARSER_EOF,
+    PARSER_SOF,
     PARSER_ANY,
     PARSER_STRING,
     PARSER_CHAR,
@@ -44,6 +45,7 @@ enum parser_type : uint8_t {
 
     // combinators
     PARSER_EXPECT,
+    PARSER_APPLY,
     PARSER_NOT,
     PARSER_AND,
     PARSER_OR,
@@ -52,13 +54,15 @@ enum parser_type : uint8_t {
     PARSER_MAYBE,
 };
 
-enum parser_flags : uint8_t {
+enum parser_flags : uint16_t {
     PARSER_FLAG_FREE_DATA = 0x01
 };
 
 struct cc_parser {
     enum parser_type type;
     enum parser_flags flags;
+
+    uint32_t rc;
 
     cc_fold_t fold;
 
@@ -70,6 +74,11 @@ struct cc_parser {
         const char *msg;
 
         int (*matchfn)(char32_t);
+
+        struct {
+            cc_apply_t af;
+            struct cc_parser *inner;
+        } apply;
 
         struct {
             const char32_t *chars;
@@ -216,10 +225,8 @@ static inline char *string_buffer_unwrap(struct string_buffer *sb) {
     return s;
 }
 
-typedef void (*gc_dtor_t)(void*);
-
-__internal struct cc_parser *gc_allocate_parser(void);
-__internal void gc_run(void);
+__internal struct cc_parser *parser_allocate(void);
+__internal void parser_free(struct cc_parser*);
 
 static inline char *vformat(const char *fmt, va_list ap) {
     va_list ap_copy;

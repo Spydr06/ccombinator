@@ -33,10 +33,6 @@ struct cc_save {
         return PARSE_SUCCESS;               \
     } while(0)
 
-#define PRIMITIVE(x) do {                           \
-        return (x) ? PARSE_SUCCESS : PARSE_FAILURE; \
-    } while(0)
-
 static int run_parser(struct cc_state *s, const struct cc_parser *p, void **r, struct cc_error *e);
 
 static inline char32_t peek_at(struct cc_state *s) {
@@ -136,110 +132,183 @@ static inline char32_t advance_char(struct cc_state *s, char32_t ch) {
     return ch;
 }
 
-static bool match_char(struct cc_state *s, char32_t ch) {
+static int allocate_string(char8_t **s, size_t n) {
+    if(!(*s = calloc(n + 1, sizeof(char8_t))))
+        return -errno;
+
+    return 0;
+}
+
+static int char_result(char8_t **s, char32_t ch) {
+    int err = allocate_string(s, utf8_cp_length(ch));
+    if(err)
+        return err;
+
+    utf8_encode(ch, *s);
+    return 0;
+}
+
+static int string_result(char8_t **r, const char8_t *s) {
+    size_t len = strlen((const char*) s);
+    int err = allocate_string(r, len);
+    if(err)
+        return err;
+
+    memcpy(*r, s, len * sizeof(char));
+    return 0;
+}
+
+static int match_char(struct cc_state *s, char32_t ch, void **r) {
     char32_t next = peek_at(s);
     if((s->flags & CC_STATE_FLAG_EOF) || next != ch)
-        return false;
+        return PARSE_FAILURE;
 
     advance_char(s, ch);
 
-    return true;
+    int err;
+    if(r != NULL && (err = char_result((char8_t**) r, ch)))
+        return err;
+
+    return PARSE_SUCCESS;
 }
 
-static bool match_eof(struct cc_state *s) {
-    peek_at(s);
-    return !!(s->flags & CC_STATE_FLAG_EOF);
-}
-
-static bool match_any(struct cc_state *s) {
+static int match_char_func(struct cc_state *s, int(*f)(char32_t), void **r) {
     char32_t next = peek_at(s);
-    if(s->flags & CC_STATE_FLAG_EOF)
-        return false;
+    if((s->flags & CC_STATE_FLAG_EOF) || !f(next))
+        return PARSE_FAILURE;
 
     advance_char(s, next);
 
-    return true;
+    int err;
+    if(r != NULL && (err = char_result((char8_t**) r, next)))
+        return err;
+    
+    return PARSE_SUCCESS;
 }
 
-static bool match_range(struct cc_state *s, char32_t lo, char32_t hi) {
+static int match_eof(struct cc_state *s) {
+    peek_at(s);
+    return (s->flags & CC_STATE_FLAG_EOF) ? PARSE_SUCCESS : PARSE_FAILURE;
+}
+
+static int match_sof(struct cc_state *s) {
+    return s->loc.byte_off == 0 ? PARSE_SUCCESS : PARSE_FAILURE;
+}
+
+static int match_any(struct cc_state *s, void **r) {
+    char32_t next = peek_at(s);
+    if(s->flags & CC_STATE_FLAG_EOF)
+        return PARSE_FAILURE;
+
+    advance_char(s, next);
+
+    int err;
+    if(r != NULL && (err = char_result((char8_t**) r, next)))
+        return err;
+
+    return PARSE_SUCCESS;
+}
+
+static int match_range(struct cc_state *s, char32_t lo, char32_t hi, void **r) {
     char32_t next = peek_at(s);
     if((s->flags & CC_STATE_FLAG_EOF) || next < lo || next > hi)
-        return false;
+        return PARSE_FAILURE;
 
     advance_char(s, next);
 
-    return true;
+    int err;
+    if(r != NULL && (err = char_result((char8_t**) r, next)))
+        return err;
+
+    return PARSE_SUCCESS;
 }
 
-static bool match_oneof(struct cc_state *s, const char32_t *chars, size_t n) {
+static int match_oneof(struct cc_state *s, const char32_t *chars, size_t n, void **r) {
     char32_t next = peek_at(s);
     if(s->flags & CC_STATE_FLAG_EOF)
-        return false;
+        return PARSE_FAILURE;
 
     bool one_found = false;
     for(size_t i = 0; i < n; i++) {
         if(next == chars[n]) {
             if(one_found)
-                return false;
+                return PARSE_FAILURE;
             one_found = true;
         }
     }
     
     if(!one_found)
-        return false;
+        return PARSE_FAILURE;
 
     advance_char(s, next);
 
-    return true;
+    int err;
+    if(r != NULL && (err = char_result((char8_t**) r, next)))
+        return err;
+
+    return PARSE_SUCCESS;
 }
 
-static bool match_anyof(struct cc_state *s, const char32_t *chars, size_t n) {
+static int match_anyof(struct cc_state *s, const char32_t *chars, size_t n, void **r) {
     char32_t next = peek_at(s);
     if(s->flags & CC_STATE_FLAG_EOF)
-        return false;
+        return PARSE_FAILURE;
 
     for(size_t i = 0; i < n; i++) {
         if(next == chars[n]) {
             advance_char(s, next);
-            return true;
+
+            int err;
+            if(r != NULL && (err = char_result((char8_t**) r, next)))
+                return err;
+
+            return PARSE_SUCCESS;
         }
     }
 
-    return false;
+    return PARSE_FAILURE;
 }
 
-static bool match_noneof(struct cc_state *s, const char32_t *chars, size_t n) {
+static int match_noneof(struct cc_state *s, const char32_t *chars, size_t n, void **r) {
     char32_t next = peek_at(s);
     if(s->flags & CC_STATE_FLAG_EOF)
-        return false;
+        return PARSE_FAILURE;
 
     for(size_t i = 0; i < n; i++) {
         if(next == chars[n])
-            return false;
+            return PARSE_FAILURE;
     }
 
     advance_char(s, next);
 
-    return true;
+    int err;
+    if(r != NULL && (err = char_result((char8_t**) r, next)))
+        return err;
+
+    return PARSE_SUCCESS;
 }
 
-static bool match_string(struct cc_state *s, const char8_t *str) {
+static int match_string(struct cc_state *s, const char8_t *str, void **r) {
     struct cc_state save = *s;
 
     for(size_t i = 0; str[i];) {
         char32_t ch = utf8_first_cp(str + i);
-        if(!match_char(s, ch)) {
+        if(!match_char(s, ch, NULL)) {
             *s = save;
-            return false;
+            return PARSE_FAILURE;
         }
 
         i += utf8_cp_length(ch);
     }
 
-    return true;
+    int err;
+    if(r != NULL && (err = string_result((char8_t**) r, str)))
+        return err;
+
+    return PARSE_SUCCESS;
 }
 
-static int combine_many(struct cc_state  *s, const struct cc_parser *p, void **r) {
+static int combine_many(struct cc_state *s, const struct cc_parser *p, void **r) {
     struct dynarr values = DYNARR_INIT;
 
     for(;;) {
@@ -289,6 +358,55 @@ static int combine_count(struct cc_state *s, const struct cc_parser *p, void **r
     return PARSE_SUCCESS;
 }
 
+static int combine_not(struct cc_state *s, const struct cc_parser *p) {
+    void *value = NULL;
+    struct cc_save save = state_save(s);
+
+    struct cc_error e;
+    memset(&e, 0, sizeof(struct cc_error));
+
+    int res = run_parser(s, p->match.unary.inner, &value, &e);
+    if(res < 0)
+        return res;
+
+    cc_err_free(&e);
+
+    if(res == PARSE_SUCCESS) {
+        state_restore(s, &save);
+        return PARSE_FAILURE;
+    }
+
+    return PARSE_SUCCESS;
+}
+
+static int combine_and(struct cc_state *s, const struct cc_parser *p, void **r, struct cc_error *e) {
+    unsigned num_values = p->match.variadic.n;
+    void *values[num_values]; // FIXME: use dynarr on larger n
+
+    for(unsigned i = 0; i < num_values; i++) {
+        int res = run_parser(s, p->match.variadic.inner[i], &values[i], e);
+        if(res == PARSE_FAILURE || res < 0)
+            return res;
+    }
+
+    if(p->fold)
+        *r = p->fold(num_values, values);
+
+    return PARSE_SUCCESS;
+}
+
+static int combine_or(struct cc_state *s, const struct cc_parser *p, void **r, struct cc_error *e) {
+    unsigned num_values = p->match.variadic.n;
+
+    for(unsigned i = 0; i < num_values; i++) {
+        int res = run_parser(s, p->match.variadic.inner[i], r, e);
+        if(res == PARSE_SUCCESS || res < 0)
+            return res;
+    }
+
+    return PARSE_FAILURE;
+}
+
 static int run_parser(struct cc_state *s, const struct cc_parser *p, void **r, struct cc_error *e) {
     assert(s && p && r && e);
 
@@ -300,19 +418,26 @@ static int run_parser(struct cc_state *s, const struct cc_parser *p, void **r, s
         case PARSER_LIFT:       SUCCESS(r, p->match.lift.lf());
         case PARSER_LIFT_VAL:   SUCCESS(r, p->match.lift.val);
 
-        case PARSER_EOF:        PRIMITIVE(match_eof(s));
-        case PARSER_ANY:        PRIMITIVE(match_any(s));
-        case PARSER_CHAR:       PRIMITIVE(match_char(s, p->match.ch));
-        case PARSER_CHAR_RANGE: PRIMITIVE(match_range(s, p->match.lo, p->match.hi));
+        case PARSER_EOF:        return match_eof(s);
+        case PARSER_SOF:        return match_sof(s);
+        case PARSER_ANY:        return match_any(s, r);
+        case PARSER_CHAR:       return match_char(s, p->match.ch, r);
+        case PARSER_CHAR_RANGE: return match_range(s, p->match.lo, p->match.hi, r);
+        case PARSER_MATCH:      return match_char_func(s, p->match.matchfn, r);
 
-        case PARSER_ONEOF:      PRIMITIVE(match_oneof(s, p->match.list.chars, p->match.list.n));
-        case PARSER_ANYOF:      PRIMITIVE(match_anyof(s, p->match.list.chars, p->match.list.n));
-        case PARSER_NONEOF:     PRIMITIVE(match_noneof(s, p->match.list.chars, p->match.list.n));
+        case PARSER_ONEOF:      return match_oneof(s, p->match.list.chars, p->match.list.n, r);
+        case PARSER_ANYOF:      return match_anyof(s, p->match.list.chars, p->match.list.n, r);
+        case PARSER_NONEOF:     return match_noneof(s, p->match.list.chars, p->match.list.n, r);
 
-        case PARSER_STRING:     PRIMITIVE(match_string(s, p->match.str));
+        case PARSER_STRING:     return match_string(s, p->match.str, r);
 
         case PARSER_MANY:       return combine_many(s, p, r);
         case PARSER_COUNT:      return combine_count(s, p, r, e);
+
+        case PARSER_AND:        return combine_and(s, p, r, e);
+        case PARSER_OR:         return combine_or(s, p, r, e);
+
+        case PARSER_NOT:        return combine_not(s, p);
 
         case PARSER_EXPECT: {
             assert(p->match.expect.inner);
@@ -328,26 +453,42 @@ static int run_parser(struct cc_state *s, const struct cc_parser *p, void **r, s
             return PARSE_FAILURE;
         }
 
+        case PARSER_APPLY: {
+            int res = run_parser(s, p->match.expect.inner, r, e);
+            if(res < 0)
+                return res;
+
+            if(p->match.apply.af)
+                *r = p->match.apply.af(*r);
+
+            return res;
+        }
+
         case PARSER_UNDEFINED:
-        default:                FAIL_WITH(e, s, "undefined parser");
+        default:                FAIL_WITH(e, s, format("undefined parser %d", p->type));
     }
 }
 
-int cc_parse(const struct cc_source *src, const struct cc_parser *p, struct cc_result *r) {
-    if(!src || !p || !r)
+int cc_parse(const struct cc_source *src, struct cc_parser *p, struct cc_result *r) {
+    if(!src || !p || !r) {
+        cc_release(p);
         return EINVAL;
+    }
     
     struct cc_state s = {
         .flags = CC_STATE_FLAGS_DEFAULT,
         .loc = CC_LOCATION_DEFAULT,
         .src = src
     };
+    
+    int err = 0;
 
     memset(r, 0, sizeof(struct cc_result));
 
-    r->err = malloc(sizeof(struct cc_error));
-    if(!r->err)
-        return errno;
+    if(!(r->err = malloc(sizeof(struct cc_error)))) {
+        err = errno;
+        goto cleanup;
+    }
     
     memset(r->err, 0, sizeof(struct cc_error));
     r->err->flags |= CC_ERR_FREE_SELF;
@@ -357,7 +498,8 @@ int cc_parse(const struct cc_source *src, const struct cc_parser *p, struct cc_r
     if(res < 0) {
         // libc error, ideally this should never happen
         free(r->err);
-        return -res;
+        err = -res;
+        goto cleanup;
     }
 
     if(res == PARSE_SUCCESS) {
@@ -365,6 +507,8 @@ int cc_parse(const struct cc_source *src, const struct cc_parser *p, struct cc_r
         r->err = NULL;
     }
 
-    return 0;
+cleanup:
+    cc_release(p);
+    return err;
 }
 

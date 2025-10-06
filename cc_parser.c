@@ -5,13 +5,99 @@
 #include <stddef.h>
 #include <errno.h>
 
+struct cc_parser *cc_retain(struct cc_parser *p) {
+    // ignore NULL (simplifies error propagation)
+    if(p)
+        p->rc++;
+        
+    return p;
+}
+
+struct cc_parser *cc_release(struct cc_parser *p) {
+    if(!p)
+        return NULL;
+
+    if(--p->rc > 0)
+        return p;
+
+    parser_free(p);
+    return NULL;
+}
+
+struct cc_parser *parser_allocate(void) {
+    struct cc_parser *p = calloc(1, sizeof(struct cc_parser));
+    if(!p)
+        return NULL;
+
+    p->rc = 1;
+    return p;
+}
+
+// free the parser ignoring the refcount
+void parser_free(struct cc_parser* p) {
+    switch(p->type) {
+        case PARSER_EXPECT:
+            cc_release(p->match.expect.inner);
+            break;
+        case PARSER_APPLY:
+            cc_release(p->match.apply.inner);
+            break;
+        case PARSER_NOT:
+        case PARSER_MANY:
+        case PARSER_COUNT:
+        case PARSER_MAYBE:
+            cc_release(p->match.unary.inner);
+            break;
+        case PARSER_AND:
+        case PARSER_OR:
+            for(unsigned i = 0; i < p->match.variadic.n; i++)
+                cc_release(p->match.variadic.inner[i]);
+            break;
+        default:
+            break;
+    }
+
+    if(!(p->flags & PARSER_FLAG_FREE_DATA))
+        goto free_self;
+
+    switch(p->type) {
+        case PARSER_STRING:
+            free((char8_t*) p->match.str);
+            break;
+        case PARSER_FAIL:
+            free((char*) p->match.msg);
+            break;
+        case PARSER_LIFT_VAL:
+            free(p->match.lift.val);
+            break;
+        case PARSER_ANYOF:
+        case PARSER_NONEOF:
+        case PARSER_ONEOF:
+            free((char32_t*) p->match.list.chars);
+            break;
+        case PARSER_EXPECT:
+            free((char*) p->match.expect.what);
+            break;
+        case PARSER_AND:
+        case PARSER_OR:
+            free(p->match.variadic.inner);
+            break;
+
+        default:
+            break;
+    }
+    
+free_self:
+    free(p);
+}
+
 struct cc_parser *cc_string(const char8_t *s) {
     if(!s) {
         errno = EINVAL;
         return NULL;
     }
 
-    struct cc_parser *p = gc_allocate_parser();
+    struct cc_parser *p = parser_allocate();
     if(!p)
         return NULL;
 
@@ -22,7 +108,7 @@ struct cc_parser *cc_string(const char8_t *s) {
 }
 
 struct cc_parser *cc_char(char32_t c) {
-    struct cc_parser *p = gc_allocate_parser();
+    struct cc_parser *p = parser_allocate();
     if(!p)
         return NULL;
 
@@ -33,7 +119,7 @@ struct cc_parser *cc_char(char32_t c) {
 }
 
 struct cc_parser *cc_range(char32_t lo, char32_t hi) {
-    struct cc_parser *p = gc_allocate_parser();
+    struct cc_parser *p = parser_allocate();
     if(!p)
         return NULL;
 
@@ -50,7 +136,7 @@ static struct cc_parser *char_arr_parser(const char32_t *chars, const char *what
         return NULL;
     }
 
-    struct cc_parser *p = gc_allocate_parser();
+    struct cc_parser *p = parser_allocate();
     if(!p)
         return NULL;
 
@@ -92,6 +178,7 @@ static struct cc_parser *char_arr_parser(const char32_t *chars, const char *what
     
     return ex;
 cleanup:
+    parser_free(p);
     // TODO: free p
     free(sb.buf);
     errno = err;
@@ -134,7 +221,7 @@ static struct cc_parser *parser_match(int (*f)(char32_t), const char *what) {
         return NULL;
     }
 
-    struct cc_parser *p = gc_allocate_parser();
+    struct cc_parser *p = parser_allocate();
     if(!p)
         return NULL;
 
@@ -171,7 +258,7 @@ struct cc_parser *cc_match(int (*f)(char32_t)) {
 }
 
 struct cc_parser *cc_eof(void) {
-    struct cc_parser *p = gc_allocate_parser();
+    struct cc_parser *p = parser_allocate();
     if(!p)
         return NULL;
 
@@ -180,8 +267,18 @@ struct cc_parser *cc_eof(void) {
     return cc_expect(p, "end of file");
 }
 
+struct cc_parser *cc_sof(void) {
+    struct cc_parser *p = parser_allocate();
+    if(!p)
+        return NULL;
+
+    p->type = PARSER_SOF;
+
+    return cc_expect(p, "start of file");
+}
+
 struct cc_parser *cc_any(void) {
-    struct cc_parser *p = gc_allocate_parser();
+    struct cc_parser *p = parser_allocate();
     if(!p)
         return NULL;
 
@@ -239,7 +336,7 @@ struct cc_parser *cc_aplhanum(void) {
 }
 
 struct cc_parser *cc_pass(void) {
-    struct cc_parser *p = gc_allocate_parser();
+    struct cc_parser *p = parser_allocate();
     if(!p)
         return NULL;
 
@@ -254,7 +351,7 @@ struct cc_parser *cc_fail(const char *e) {
         return NULL;
     }
 
-    struct cc_parser *p = gc_allocate_parser();
+    struct cc_parser *p = parser_allocate();
     if(!p)
         return NULL;
 
@@ -279,7 +376,7 @@ struct cc_parser *cc_failf(const char *fmt, ...) {
     if(!e)
         return NULL;
 
-    struct cc_parser *p = gc_allocate_parser();
+    struct cc_parser *p = parser_allocate();
     if(!p)
         return NULL;
 
@@ -297,7 +394,7 @@ struct cc_parser *cc_lift(cc_lift_t lf) {
         return NULL;
     }
 
-    struct cc_parser *p = gc_allocate_parser();
+    struct cc_parser *p = parser_allocate();
     if(!p)
         return NULL;
 
@@ -308,7 +405,7 @@ struct cc_parser *cc_lift(cc_lift_t lf) {
 }
 
 struct cc_parser *cc_lift_val(void *val) {
-    struct cc_parser *p = gc_allocate_parser();
+    struct cc_parser *p = parser_allocate();
     if(!p)
         return NULL;
 

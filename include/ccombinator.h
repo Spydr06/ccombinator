@@ -20,9 +20,16 @@ extern "C" {
 struct cc_parser;
 struct cc_source;
 
+enum cc_value_type {
+    CC_PTR,
+    CC_STRING,
+    CC_CHAR
+};
+
 typedef void *(*cc_lift_t)(void);
 
 typedef void *(*cc_fold_t)(size_t, void**);
+typedef void *(*cc_apply_t)(void*);
 
 typedef struct cc_parser cc_parser_t;
 typedef struct cc_source cc_source_t;
@@ -70,6 +77,11 @@ int cc_err_fprint(struct cc_error *e, FILE *f);
 
 void cc_err_free(struct cc_error *e);
 
+// parser refcounting
+
+struct cc_parser *cc_release(struct cc_parser *p);
+struct cc_parser *cc_retain(struct cc_parser *p);
+
 // parsers
 
 struct cc_parser *cc_any(void);
@@ -84,7 +96,8 @@ struct cc_parser *cc_oneof(const char32_t chars[]);
 struct cc_parser *cc_noneof(const char32_t chars[]);
 struct cc_parser *cc_match(int (*f)(char32_t));
 
-struct cc_parser *cc_eof(void);
+struct cc_parser *cc_eof(void); // end of file
+struct cc_parser *cc_sof(void); // start of file
 struct cc_parser *cc_any(void);
 
 struct cc_parser *cc_whitespace(void);
@@ -119,13 +132,15 @@ struct cc_parser *cc_expect(struct cc_parser *p, const char *e);
 CC_format_printf(2)
 struct cc_parser *cc_expectf(struct cc_parser *p, const char *fmt, ...);
 
+struct cc_parser *cc_apply(struct cc_parser *p, cc_apply_t f);
+
 struct cc_parser *cc_not(struct cc_parser* p);
 
-struct cc_parser *cc_and(cc_fold_t f, unsigned n, ...);
+struct cc_parser *cc_and(unsigned n, cc_fold_t f, ...);
 struct cc_parser *cc_or(unsigned n, ...);
 
 struct cc_parser *cc_many(cc_fold_t f, struct cc_parser *p);
-struct cc_parser *cc_count(cc_fold_t f, unsigned n, struct cc_parser *p);
+struct cc_parser *cc_count(unsigned n, cc_fold_t f, struct cc_parser *p);
 struct cc_parser *cc_maybe(struct cc_parser *p);
 
 // source
@@ -136,7 +151,7 @@ struct cc_source *cc_nstring_source(const char8_t *s, size_t n);
 struct cc_source *cc_open(const char *filename);
 int cc_close(struct cc_source *s);
 
-int cc_parse(const struct cc_source *s, const struct cc_parser *p, struct cc_result *r);
+int cc_parse(const struct cc_source *s, struct cc_parser *p, struct cc_result *r);
 
 // versioning
 

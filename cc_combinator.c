@@ -8,14 +8,18 @@
 #include <errno.h>
 
 struct cc_parser *cc_expect(struct cc_parser *a, const char *e) {
-    struct cc_parser *p = gc_allocate_parser();
+    struct cc_parser *p = parser_allocate();
     if(!p)
-        return NULL;
+        goto failure;
 
+    p->type = PARSER_EXPECT;
     p->match.expect.inner = a;
     p->match.expect.what = e;
 
     return p;
+failure:
+    cc_release(a);
+    return NULL;
 }
 
 CC_format_printf(2)
@@ -31,11 +35,11 @@ struct cc_parser *cc_expectf(struct cc_parser *a, const char *fmt, ...) {
     va_end(ap);
 
     if(!s)
-        return NULL;
+        goto failure;
 
-    struct cc_parser *p = gc_allocate_parser();
+    struct cc_parser *p = parser_allocate();
     if(!p)
-        return NULL;
+        goto failure;
 
     p->type = PARSER_EXPECT;
     p->match.expect.inner = a;
@@ -44,25 +48,54 @@ struct cc_parser *cc_expectf(struct cc_parser *a, const char *fmt, ...) {
     p->flags |= PARSER_FLAG_FREE_DATA;
 
     return p;
+failure:
+    cc_release(a);
+    return NULL;
+}
+
+struct cc_parser *cc_apply(struct cc_parser *a, cc_apply_t f) {
+    if(!a) {
+        errno = EINVAL;
+        goto failure;
+    }
+
+    struct cc_parser *p = parser_allocate();
+    if(!p)
+        goto failure;
+
+    p->type = PARSER_APPLY;
+    p->match.apply.af = f;
+    p->match.apply.inner = a;
+
+    return p;
+failure:
+    cc_release(a);
+    return NULL;
 }
 
 struct cc_parser *cc_not(struct cc_parser* a) {
     if(!a) {
         errno = EINVAL;
-        return NULL;
+        goto failure;
     }
 
-    struct cc_parser *p = gc_allocate_parser();
+    struct cc_parser *p = parser_allocate();
     if(!p)
-        return NULL;
+        goto failure;
 
     p->type = PARSER_NOT;
     p->match.unary.inner = a;
 
     return p;
+failure:
+    cc_release(a);
+    return NULL;
 }
 
 static struct cc_parser *variadic_parser(unsigned n, va_list ap) {
+    va_list ap_copy;
+    va_copy(ap_copy, ap);
+
     struct cc_parser **ps = malloc(n * sizeof(struct cc_parser*));
     if(!ps)
         return NULL;
@@ -73,27 +106,34 @@ static struct cc_parser *variadic_parser(unsigned n, va_list ap) {
 
         if(!a) {
             errno = EINVAL;
-            goto cleanup;
+            goto failure;
         }
     }
     
-    struct cc_parser *p = gc_allocate_parser();
+    struct cc_parser *p = parser_allocate();
     if(!p)
-        goto cleanup;
+        goto failure;
 
     p->flags |= PARSER_FLAG_FREE_DATA;
     p->match.variadic.n = n;
     p->match.variadic.inner = ps;
 
+    va_end(ap_copy);
     return p;
-cleanup:
+failure:
+    for(unsigned i = 0; i < n; i++) {
+        struct cc_parser *a = va_arg(ap, struct cc_parser*);
+        cc_release(a);
+    }
+
+    va_end(ap_copy);
     free(ps);
     return NULL;
 }
 
-struct cc_parser *cc_and(cc_fold_t f, unsigned n, ...) {
+struct cc_parser *cc_and(unsigned n, cc_fold_t f, ...) {
     va_list ap;
-    va_start(ap, n);
+    va_start(ap, f);
     struct cc_parser *p = variadic_parser(n, ap);
     va_end(ap);
 
@@ -121,16 +161,19 @@ struct cc_parser *cc_or(unsigned n, ...) {
 static struct cc_parser *unary_parser(struct cc_parser *a) {
     if(!a) {
         errno = EINVAL;
-        return NULL;
+        goto failure;
     }
 
-    struct cc_parser *p = gc_allocate_parser();
+    struct cc_parser *p = parser_allocate();
     if(!p)
-        return NULL;
+        goto failure;
 
     p->match.unary.inner = a;
 
     return p;
+failure:
+    cc_release(a);
+    return NULL;
 }
 
 struct cc_parser *cc_many(cc_fold_t f, struct cc_parser *a) {
@@ -143,7 +186,7 @@ struct cc_parser *cc_many(cc_fold_t f, struct cc_parser *a) {
     return p;
 }
 
-struct cc_parser *cc_count(cc_fold_t f, unsigned n, struct cc_parser *a) {
+struct cc_parser *cc_count(unsigned n, cc_fold_t f, struct cc_parser *a) {
     struct cc_parser *p = unary_parser(a);
     if(!p)
         return NULL;

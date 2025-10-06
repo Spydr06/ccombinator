@@ -268,6 +268,7 @@ int cc_close(struct cc_source *s) {
     if(s->buffer_dtor && (err = s->buffer_dtor(s->buffer)))
         return err;
 
+    free(s);
     return 0;
 }
 
