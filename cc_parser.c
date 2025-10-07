@@ -4,6 +4,7 @@
 
 #include <stddef.h>
 #include <errno.h>
+#include <uchar.h>
 
 struct cc_parser *cc_retain(struct cc_parser *p) {
     // ignore NULL (simplifies error propagation)
@@ -14,10 +15,7 @@ struct cc_parser *cc_retain(struct cc_parser *p) {
 }
 
 struct cc_parser *cc_release(struct cc_parser *p) {
-    if(!p)
-        return NULL;
-
-    if(--p->rc > 0)
+    if(!p || --p->rc > 0)
         return p;
 
     parser_free(p);
@@ -115,7 +113,9 @@ struct cc_parser *cc_char(char32_t c) {
     p->type = PARSER_CHAR;
     p->match.ch = c;
 
-    return cc_expectf(p, "char \'%lc\'", c);
+    char8_t buf[5];
+    utf8_encode(p->match.ch, buf);
+    return cc_expectf(p, "\'%s\'", buf);
 }
 
 struct cc_parser *cc_range(char32_t lo, char32_t hi) {
@@ -127,7 +127,10 @@ struct cc_parser *cc_range(char32_t lo, char32_t hi) {
     p->match.lo = lo;
     p->match.hi = hi;
 
-    return cc_expectf(p, "character in range \'%lc\' - \'%lc\'", lo, hi);
+    char8_t lo_buf[5], hi_buf[5];
+    utf8_encode(lo, lo_buf);
+    utf8_encode(hi, hi_buf);
+    return cc_expectf(p, "character in range \'%s\' - \'%s\'", lo_buf, hi_buf);
 }
 
 static struct cc_parser *char_arr_parser(const char32_t *chars, const char *what) {
@@ -159,11 +162,16 @@ static struct cc_parser *char_arr_parser(const char32_t *chars, const char *what
 
     else {
         for(size_t i = 0; i < p->match.list.n - 2; i++) {
-            if((err = string_buffer_append(&sb, "'%lc', ", chars[i])))
+            char8_t buf[5];
+            utf8_encode(chars[i], buf);
+            if((err = string_buffer_append(&sb, "'%s', ", buf)))
                 goto cleanup;
         }
 
-        if((err = string_buffer_append(&sb, "'%lc' or '%lc'", chars[p->match.list.n - 2], chars[p->match.list.n - 1])))
+        char8_t lo_buf[5], hi_buf[5];
+        utf8_encode(chars[p->match.list.n - 2], hi_buf);
+        utf8_encode(chars[p->match.list.n - 1], lo_buf);
+        if((err = string_buffer_append(&sb, "'%s' or '%s'", lo_buf, hi_buf)))
             goto cleanup;
     }
 

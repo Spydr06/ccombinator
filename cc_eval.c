@@ -6,9 +6,11 @@
 #include <memory.h>
 
 #include <assert.h>
+#include <locale.h>
 
 #define CC_STATE_FLAGS_DEFAULT 0x00
 #define CC_STATE_FLAG_EOF 0x01
+#define CC_STATE_FLAG_NOERR 0x02
 
 struct cc_state {
     int flags;
@@ -55,6 +57,9 @@ static inline void state_restore(struct cc_state *s, const struct cc_save *save)
 }
 
 static int new_error(struct cc_error *e, struct cc_state *s, const char *msg) {
+    if(s->flags & CC_STATE_FLAG_NOERR)
+        return 0;
+
     if(!e)
         return EINVAL;
 
@@ -62,7 +67,8 @@ static int new_error(struct cc_error *e, struct cc_state *s, const char *msg) {
 
     e->loc = s->loc;
     e->received = peek_at(s);
-    e->failure = msg;
+    if(!(e->failure = strdup(msg)))
+        return errno;
 
     return 0;
 }
@@ -87,7 +93,7 @@ static int new_error(struct cc_error *e, struct cc_state *s, const char *msg) {
 }*/
 
 static int add_expected(struct cc_error *e, struct cc_state *s, const char *expected) {
-    if(e->num_expected >= CC_ERR_MAX_EXPECTED)
+    if(s->flags & CC_STATE_FLAG_NOERR || e->num_expected >= CC_ERR_MAX_EXPECTED)
         return 0; // cannot add anymore, don't error tho
 
     if(e->num_expected == 0) {
@@ -96,7 +102,11 @@ static int add_expected(struct cc_error *e, struct cc_state *s, const char *expe
         e->received = peek_at(s);
     }
 
-    e->expected[e->num_expected++] = expected;
+    char *expected_copy = strdup(expected);
+    if(!expected_copy)
+        return errno;
+
+    e->expected[e->num_expected++] = expected_copy;
 
     return 0;
 }
@@ -311,32 +321,33 @@ static int match_string(struct cc_state *s, const char8_t *str, void **r) {
 static int combine_many(struct cc_state *s, const struct cc_parser *p, void **r) {
     struct dynarr values = DYNARR_INIT;
 
+    s->flags |= CC_STATE_FLAG_NOERR;
+    int res;
+
     for(;;) {
         void *val = NULL;
         struct cc_save save = state_save(s);
-        struct cc_error e;
-        memset(&e, 0, sizeof(struct cc_error));
 
-        int res = run_parser(s, p->match.unary.inner, &val, &e);
+        res = run_parser(s, p->match.unary.inner, &val, NULL);
         if(res == PARSE_FAILURE) {
             state_restore(s, &save);
-            cc_err_free(&e);
             break;
         }
-        if(res < 0) {
-            dynarr_free(&values);
-            return res;
-        }
+        if(res < 0)
+            goto cleanup;
 
         int err = dynarr_append(&values, val);
         if(err) {
-            dynarr_free(&values);
-            return -err;
+            res = -err;
+            goto cleanup;
         }
     }
 
     if(p->fold)
         *r = p->fold(values.len, values.elems);
+ 
+cleanup:
+    s->flags &= ~CC_STATE_FLAG_NOERR;
 
     dynarr_free(&values);
     return PARSE_SUCCESS;
@@ -362,19 +373,18 @@ static int combine_not(struct cc_state *s, const struct cc_parser *p) {
     void *value = NULL;
     struct cc_save save = state_save(s);
 
-    struct cc_error e;
-    memset(&e, 0, sizeof(struct cc_error));
+    s->flags |= CC_STATE_FLAG_NOERR;
 
-    int res = run_parser(s, p->match.unary.inner, &value, &e);
+    int res = run_parser(s, p->match.unary.inner, &value, NULL);
     if(res < 0)
         return res;
-
-    cc_err_free(&e);
 
     if(res == PARSE_SUCCESS) {
         state_restore(s, &save);
         return PARSE_FAILURE;
     }
+
+    s->flags &= ~CC_STATE_FLAG_NOERR;
 
     return PARSE_SUCCESS;
 }
@@ -408,7 +418,7 @@ static int combine_or(struct cc_state *s, const struct cc_parser *p, void **r, s
 }
 
 static int run_parser(struct cc_state *s, const struct cc_parser *p, void **r, struct cc_error *e) {
-    assert(s && p && r && e);
+    assert(s && p && r);
 
     switch(p->type) {
         case PARSER_FAIL:       FAIL_WITH(e, s, (char*) p->match.msg);
@@ -470,9 +480,14 @@ static int run_parser(struct cc_state *s, const struct cc_parser *p, void **r, s
 }
 
 int cc_parse(const struct cc_source *src, struct cc_parser *p, struct cc_result *r) {
+    if(r)
+        memset(r, 0, sizeof(struct cc_result));
+    
+    int err = 0;
+    
     if(!src || !p || !r) {
-        cc_release(p);
-        return EINVAL;
+        err = EINVAL;
+        goto cleanup;
     }
     
     struct cc_state s = {
@@ -481,17 +496,12 @@ int cc_parse(const struct cc_source *src, struct cc_parser *p, struct cc_result 
         .src = src
     };
     
-    int err = 0;
-
-    memset(r, 0, sizeof(struct cc_result));
-
     if(!(r->err = malloc(sizeof(struct cc_error)))) {
         err = errno;
         goto cleanup;
     }
     
     memset(r->err, 0, sizeof(struct cc_error));
-    r->err->flags |= CC_ERR_FREE_SELF;
 
     int res = run_parser(&s, p, &r->out, r->err);
 

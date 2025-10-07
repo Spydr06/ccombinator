@@ -46,9 +46,6 @@ struct cc_location {
     size_t byte_off;
 };
 
-#define CC_ERR_FREE_SELF            0x01
-#define CC_ERR_FREE_FAILURE         0x02
-#define CC_ERR_FREE_EXPECTED_ELEMS  0x04
 #define CC_ERR_MAX_EXPECTED 16
 
 struct cc_error {
@@ -61,8 +58,6 @@ struct cc_error {
     size_t num_expected;
 
     char32_t received;
-
-    int flags;
 };
 
 struct cc_result {

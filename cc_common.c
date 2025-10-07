@@ -66,7 +66,9 @@ char *cc_err_string(struct cc_error *e) {
         goto cleanup;
 
     if(utf8_is_print(e->received)) {
-        if((err = string_buffer_append(&sb, "'%lc'", e->received)))
+        char8_t buf[5];
+        utf8_encode(e->received, buf);
+        if((err = string_buffer_append(&sb, "'%s'", buf)))
             goto cleanup;
     }
     else if((err = string_buffer_append(&sb, "<u+%04x>", (uint32_t) e->received)))
@@ -102,16 +104,12 @@ int cc_err_fprint(struct cc_error *e, FILE *f) {
 }
 
 void cc_err_free(struct cc_error *e) {
-    if(e->flags & CC_ERR_FREE_FAILURE)
-        free((void*) e->failure);
+    free((void*) e->failure);
 
-    if(e->flags & CC_ERR_FREE_EXPECTED_ELEMS) {
-        for(size_t i = 0; i < e->num_expected; i++)
-            free((void*) e->expected[i]);
-    }
+    for(size_t i = 0; i < e->num_expected; i++)
+        free((void*) e->expected[i]);
 
-    if(e->flags & CC_ERR_FREE_SELF)
-        free(e);
+    free(e);
 }
 
 int dynarr_append(struct dynarr *da, void *elem) {

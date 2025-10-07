@@ -142,8 +142,11 @@ static inline uint8_t utf8_cp_length(char32_t cp) {
 
 static inline void utf8_encode(char32_t cp, char8_t dst[5]) {
     // TODO: implement correctly
-    dst[0] = cp & 0xff;
-    dst[1] = '\0';
+    //dst[0] = cp & 0xff;
+    //dst[1] = '\0';
+
+    mbstate_t ps = {0};
+    c32rtomb((char*) dst, cp, &ps); 
 }
 
 // TODO: replace with proper UTF-8 functions

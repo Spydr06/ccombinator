@@ -2,6 +2,7 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <locale.h>
 
 static void *fold_ident(size_t n, void** p) {
     size_t total = 0;
@@ -25,12 +26,15 @@ static void *fold_ident(size_t n, void** p) {
 }
 
 int main() {
+    setlocale(LC_ALL, "");
+
     struct cc_parser *alpha = cc_or(2, cc_range('a', 'z'), cc_range('A', 'Z'));
     struct cc_parser *digit = cc_range('0', '9');
     struct cc_parser *underscore = cc_char('_');
 
-    struct cc_parser *p = cc_and(2, 
+    struct cc_parser *p = cc_and(3, 
         fold_ident,
+        cc_char(U'😀'),
         cc_or(2, cc_retain(alpha), cc_retain(underscore)),
         cc_many(fold_ident, cc_or(3, alpha, digit, underscore))
     );
