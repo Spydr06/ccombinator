@@ -28,6 +28,8 @@ char *cc_err_string(struct cc_error *e) {
     struct string_buffer sb = STRING_BUFFER_INIT;
     int err;
 
+    char8_t buf[CC_UTF8_ENCODE_PRINTABLE_MAX];
+
     if(e->failure) {
         if(e->filename && (err = string_buffer_append(&sb, "%s: ", e->filename)))
             goto cleanup;
@@ -65,16 +67,10 @@ char *cc_err_string(struct cc_error *e) {
     if((err = string_buffer_append(&sb, " at ")))
         goto cleanup;
 
-    if(utf8_is_print(e->received)) {
-        char8_t buf[5];
-        utf8_encode(e->received, buf);
-        if((err = string_buffer_append(&sb, "'%s'", buf)))
-            goto cleanup;
-    }
-    else if((err = string_buffer_append(&sb, "<u+%04x>", (uint32_t) e->received)))
+    if((err = utf8_encode_printable(e->received, buf)))
         goto cleanup;
 
-    if((err = string_buffer_append(&sb, "\n")))
+    if((err = string_buffer_append(&sb, (char*) buf)))
         goto cleanup;
 
 finish:
@@ -268,5 +264,75 @@ int cc_close(struct cc_source *s) {
 
     free(s);
     return 0;
+}
+
+void *cc_fold_concat(size_t n, void **xs) {
+    if(n == 1)
+        return xs[0];
+
+    size_t total = 0;
+
+    for(size_t i = 0; i < n; i++)
+        total += xs[i] ? strlen(xs[i]) : 0;
+
+    size_t off = 0;
+    char8_t *s = malloc((total + 1) * sizeof(char8_t));
+    if(!s)
+        return NULL;
+
+    for(size_t i = 0; i < n; i++) {
+        if(!xs[i])
+            continue;
+
+        size_t l = strlen(xs[i]);
+        memcpy(s + off, xs[i], l);
+        off += l;
+
+        free(xs[i]);
+    }
+
+    s[off] = '\0';
+    return s;
+}
+
+void *cc_fold_first(size_t n, void **r) {
+    if(n == 0)
+        return NULL;
+
+    for(size_t i = 1; i < n; i++)
+        free(r[i]);
+    
+    return r[0];
+}
+
+void *cc_fold_middle(size_t n, void **r) {
+    if(n == 0)
+        return NULL;
+
+    size_t m = n / 2;
+
+    for(size_t i = 0; i < n; i++) {
+        if(i == m) continue;
+
+        free(r[i]);
+    }
+
+    return r[m];
+}
+
+void *cc_fold_last(size_t n, void **r) {
+    if(n == 0)
+        return NULL;
+
+    for(size_t i = 0; i < n - 1; i++)
+        free(r[i]);
+
+    return r[n - 1];
+}
+
+void *cc_fold_null(size_t n, void **r) {
+    for(size_t i = 0; i < n; i++)
+        free(r[i]);
+    return NULL;
 }
 

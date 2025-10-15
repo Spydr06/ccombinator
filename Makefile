@@ -28,7 +28,7 @@ shared: $(BUILD_DIR)/$(SHARED_LIB)
 examples: $(EXAMPLES)
 
 $(BUILD_DIR)/$(EXAMPLES_DIR)/%: $(EXAMPLES_DIR)/%.c $(CC_HEADERS) $(BUILD_DIR)/$(EXAMPLES_DIR) static shared
-	$(CC) $(CFLAGS) $(LDFLAGS) -L$(BUILD_DIR) -lccombinator -o $@ $<
+	$(CC) $(CFLAGS) $(LDFLAGS) -L$(BUILD_DIR) -o $@ $< -l:libccombinator.a 
 
 $(BUILD_DIR)/$(STATIC_LIB): $(CC_OBJECTS)
 	$(AR) rcv $@ $^

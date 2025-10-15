@@ -4,27 +4,6 @@
 #include <stdlib.h>
 #include <locale.h>
 
-static void *fold_ident(size_t n, void** p) {
-    size_t total = 0;
-
-    for(size_t i = 0; i < n; i++)
-        total += strlen(p[i]);
-
-    char8_t *s = malloc((total + 1) * sizeof(char8_t));
-    size_t off = 0;
-
-    for(size_t i = 0; i < n; i++) {
-        size_t l = strlen(p[i]);
-        memcpy(s + off, p[i], l);
-        off += l;
-
-        free(p[i]);
-    }
-
-    s[off] = '\0';
-    return s;
-}
-
 int main() {
     setlocale(LC_ALL, "");
 
@@ -32,14 +11,15 @@ int main() {
     struct cc_parser *digit = cc_range('0', '9');
     struct cc_parser *underscore = cc_char('_');
 
-    struct cc_parser *p = cc_and(3, 
-        fold_ident,
-        cc_char(U'😀'),
+    struct cc_parser *p = cc_and(4, 
+        cc_fold_concat,
         cc_or(2, cc_retain(alpha), cc_retain(underscore)),
-        cc_many(fold_ident, cc_or(3, alpha, digit, underscore))
+        cc_many(cc_fold_concat, cc_or(3, alpha, digit, underscore)),
+        cc_maybe(cc_char('!')),
+        cc_eof()
     );
 
-    struct cc_source *s = cc_string_source(u8"uint64_t");
+    struct cc_source *s = cc_string_source(u8"uint64_t!");
 
     struct cc_result r;
     int err = cc_parse(s, p, &r);

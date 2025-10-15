@@ -22,6 +22,12 @@ struct cc_parser *cc_release(struct cc_parser *p) {
     return NULL;
 }
 
+void cc_parser_copy(struct cc_parser *d, const struct cc_parser* s) {
+    int d_rc = d->rc;
+    memcpy(d, s, sizeof(struct cc_parser));
+    d->rc = d_rc;
+}
+
 struct cc_parser *parser_allocate(void) {
     struct cc_parser *p = calloc(1, sizeof(struct cc_parser));
     if(!p)
@@ -33,6 +39,9 @@ struct cc_parser *parser_allocate(void) {
 
 // free the parser ignoring the refcount
 void parser_free(struct cc_parser* p) {
+    if(p->flags & PARSER_FLAG_RETAIN_INNER)
+        goto free_data;
+
     switch(p->type) {
         case PARSER_EXPECT:
             cc_release(p->match.expect.inner);
@@ -44,6 +53,7 @@ void parser_free(struct cc_parser* p) {
         case PARSER_MANY:
         case PARSER_COUNT:
         case PARSER_MAYBE:
+        case PARSER_LEAST:
             cc_release(p->match.unary.inner);
             break;
         case PARSER_AND:
@@ -51,10 +61,14 @@ void parser_free(struct cc_parser* p) {
             for(unsigned i = 0; i < p->match.variadic.n; i++)
                 cc_release(p->match.variadic.inner[i]);
             break;
+        case PARSER_BIND:
+            cc_release(p->match.bind.inner);
+            break;
         default:
             break;
     }
 
+free_data:
     if(!(p->flags & PARSER_FLAG_FREE_DATA))
         goto free_self;
 
@@ -80,7 +94,12 @@ void parser_free(struct cc_parser* p) {
         case PARSER_OR:
             free(p->match.variadic.inner);
             break;
-
+        case PARSER_LOOKUP:
+            free((char*) p->match.lookup);
+            break;
+        case PARSER_BIND:
+            free((char*) p->match.bind.name);
+            break;
         default:
             break;
     }
@@ -113,9 +132,9 @@ struct cc_parser *cc_char(char32_t c) {
     p->type = PARSER_CHAR;
     p->match.ch = c;
 
-    char8_t buf[5];
-    utf8_encode(p->match.ch, buf);
-    return cc_expectf(p, "\'%s\'", buf);
+    char8_t buf[CC_UTF8_ENCODE_PRINTABLE_MAX];
+    utf8_encode_printable(p->match.ch, buf);
+    return cc_expectf(p, "%s", (char*) buf);
 }
 
 struct cc_parser *cc_range(char32_t lo, char32_t hi) {
@@ -127,10 +146,11 @@ struct cc_parser *cc_range(char32_t lo, char32_t hi) {
     p->match.lo = lo;
     p->match.hi = hi;
 
-    char8_t lo_buf[5], hi_buf[5];
-    utf8_encode(lo, lo_buf);
-    utf8_encode(hi, hi_buf);
-    return cc_expectf(p, "character in range \'%s\' - \'%s\'", lo_buf, hi_buf);
+    char8_t lo_buf[CC_UTF8_ENCODE_PRINTABLE_MAX], 
+            hi_buf[CC_UTF8_ENCODE_PRINTABLE_MAX];
+    utf8_encode_printable(lo, lo_buf);
+    utf8_encode_printable(hi, hi_buf);
+    return cc_expectf(p, "character in range %s - %s", lo_buf, hi_buf);
 }
 
 static struct cc_parser *char_arr_parser(const char32_t *chars, const char *what) {
@@ -162,16 +182,17 @@ static struct cc_parser *char_arr_parser(const char32_t *chars, const char *what
 
     else {
         for(size_t i = 0; i < p->match.list.n - 2; i++) {
-            char8_t buf[5];
-            utf8_encode(chars[i], buf);
-            if((err = string_buffer_append(&sb, "'%s', ", buf)))
+            char8_t buf[CC_UTF8_ENCODE_PRINTABLE_MAX];
+            utf8_encode_printable(chars[i], buf);
+            if((err = string_buffer_append(&sb, "%s, ", buf)))
                 goto cleanup;
         }
 
-        char8_t lo_buf[5], hi_buf[5];
-        utf8_encode(chars[p->match.list.n - 2], hi_buf);
-        utf8_encode(chars[p->match.list.n - 1], lo_buf);
-        if((err = string_buffer_append(&sb, "'%s' or '%s'", lo_buf, hi_buf)))
+        char8_t lo_buf[CC_UTF8_ENCODE_PRINTABLE_MAX],
+                hi_buf[CC_UTF8_ENCODE_PRINTABLE_MAX];
+        utf8_encode_printable(chars[p->match.list.n - 2], hi_buf);
+        utf8_encode_printable(chars[p->match.list.n - 1], lo_buf);
+        if((err = string_buffer_append(&sb, "%s or %s", lo_buf, hi_buf)))
             goto cleanup;
     }
 
@@ -419,6 +440,39 @@ struct cc_parser *cc_lift_val(void *val) {
 
     p->type = PARSER_LIFT;
     p->match.lift.val = val;
+
+    return p;
+}
+
+struct cc_parser *cc_lookup(const char *name) {
+    if(!name) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    struct cc_parser *p = parser_allocate();
+    if(!p)
+        return NULL;
+
+    p->type = PARSER_LOOKUP;
+    p->match.lookup = name;
+
+    return p;
+}
+
+struct cc_parser *cc_bind(const char *name, struct cc_parser *a) {
+    if(!name || !a) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    struct cc_parser *p = parser_allocate();
+    if(!p)
+        return NULL;
+
+    p->type = PARSER_BIND;
+    p->match.bind.name = name;
+    p->match.bind.inner = a;
 
     return p;
 }

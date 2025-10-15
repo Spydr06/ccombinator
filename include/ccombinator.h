@@ -27,15 +27,17 @@ enum cc_value_type {
 };
 
 typedef void *(*cc_lift_t)(void);
-
 typedef void *(*cc_fold_t)(size_t, void**);
 typedef void *(*cc_apply_t)(void*);
 
-typedef struct cc_parser cc_parser_t;
-typedef struct cc_source cc_source_t;
-typedef struct cc_location cc_location_t;
+typedef struct cc_parser *(*cc_fix_t)(struct cc_parser*, void*);
+
 typedef struct cc_error cc_error_t;
+typedef struct cc_grammar cc_grammar_t;
+typedef struct cc_location cc_location_t;
+typedef struct cc_parser cc_parser_t;
 typedef struct cc_result cc_result_t;
+typedef struct cc_source cc_source_t;
 
 // error handling
 
@@ -76,6 +78,8 @@ void cc_err_free(struct cc_error *e);
 
 struct cc_parser *cc_release(struct cc_parser *p);
 struct cc_parser *cc_retain(struct cc_parser *p);
+
+void cc_parser_copy(struct cc_parser *d, const struct cc_parser* s);
 
 // parsers
 
@@ -120,6 +124,9 @@ struct cc_parser *cc_failf(const char *fmt, ...);
 struct cc_parser *cc_lift(cc_lift_t lf);
 struct cc_parser *cc_lift_val(void *val);
 
+struct cc_parser *cc_lookup(const char *name);
+struct cc_parser *cc_bind(const char *name, struct cc_parser *a);
+
 // combinators
 
 struct cc_parser *cc_expect(struct cc_parser *p, const char *e);
@@ -136,7 +143,40 @@ struct cc_parser *cc_or(unsigned n, ...);
 
 struct cc_parser *cc_many(cc_fold_t f, struct cc_parser *p);
 struct cc_parser *cc_count(unsigned n, cc_fold_t f, struct cc_parser *p);
+struct cc_parser *cc_least(unsigned n, cc_fold_t f, struct cc_parser *p);
 struct cc_parser *cc_maybe(struct cc_parser *p);
+
+struct cc_parser *cc_fix(cc_fix_t f, void *p);
+
+// utility functions
+
+void *cc_fold_concat(size_t n, void **r);
+void *cc_fold_parseint(size_t n, void **r);
+
+void *cc_fold_first(size_t n, void **r);
+void *cc_fold_middle(size_t n, void **r);
+void *cc_fold_last(size_t n, void **r);
+
+void *cc_fold_null(size_t n, void **r);
+
+// regular expressions
+
+struct cc_parser *cc_regex_from(const struct cc_source *s, struct cc_error **e);
+struct cc_parser *cc_regex(const char8_t *re, struct cc_error **e);
+
+void cc_regex_state_release(void);
+
+// backus-naur form (BNF)
+
+struct cc_grammar *cc_bnf_from(const struct cc_source *s, struct cc_error **e);
+struct cc_grammar *cc_bnf(const char8_t *s, struct cc_error **e);
+
+void cc_bnf_state_release(void);
+
+// grammar
+
+struct cc_parser *cc_parser_by_name(const struct cc_grammar *g);
+void cc_grammar_free(struct cc_grammar *g);
 
 // source
 

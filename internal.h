@@ -4,12 +4,13 @@
 #include <ccombinator.h>
 
 #include <ctype.h>
-#include <stdio.h>
-#include <uchar.h>
-#include <stdint.h>
-#include <stdarg.h>
-#include <stdlib.h>
+#include <errno.h>
 #include <memory.h>
+#include <stdarg.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <uchar.h>
 
 #define QUOTE(a) #a
 
@@ -25,6 +26,11 @@
 #endif
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
+
+#define CC_UTF8_ENCODE_MAX (MB_CUR_MAX + 1)
+#define CC_UTF8_ENCODE_PRINTABLE_MAX MAX(CC_UTF8_ENCODE_MAX, 16)
+
+#define CC_UTF8_IS_CONT(x) (((x) & 0xc0) == 0x80)
 
 enum parser_type : uint16_t {
     PARSER_UNDEFINED = 0,
@@ -43,6 +49,9 @@ enum parser_type : uint16_t {
     PARSER_NONEOF,
     PARSER_ONEOF,
 
+    PARSER_LOOKUP,
+    PARSER_BIND,
+
     // combinators
     PARSER_EXPECT,
     PARSER_APPLY,
@@ -51,11 +60,13 @@ enum parser_type : uint16_t {
     PARSER_OR,
     PARSER_MANY,
     PARSER_COUNT,
+    PARSER_LEAST,
     PARSER_MAYBE,
 };
 
 enum parser_flags : uint16_t {
-    PARSER_FLAG_FREE_DATA = 0x01
+    PARSER_FLAG_FREE_DATA = 0x01,
+    PARSER_FLAG_RETAIN_INNER = 0x02
 };
 
 struct cc_parser {
@@ -74,6 +85,13 @@ struct cc_parser {
         const char *msg;
 
         int (*matchfn)(char32_t);
+
+        const char *lookup;
+
+        struct {
+            const char *name;
+            struct cc_parser *inner;
+        } bind;
 
         struct {
             cc_apply_t af;
@@ -118,36 +136,18 @@ struct cc_source {
     int (*buffer_dtor)(const char8_t *buffer);
 };
 
-#define UTF8_IS_CONT(x) (((x) & 0xc0) == 0x80)
-
 static inline char32_t utf8_first_cp(const uint8_t *s) {
     uint32_t k = s[0] ? __builtin_clz(~(s[0] << 24)) : 0;
     uint32_t mask = (1 << (8 - k)) - 1;
     uint32_t value = *s & mask;
 
-    for(s++, k--; k > 0 && UTF8_IS_CONT(s[0]); k--, s++) {
+    for(s++, k--; k > 0 && CC_UTF8_IS_CONT(s[0]); k--, s++) {
         value <<= 6;
         value += (*s & 0x3f);
     }
 
     return (char32_t) value;
 } 
-
-static inline uint8_t utf8_cp_length(char32_t cp) {
-    return 1u
-        + (cp >= 0x80)
-        + (cp >= 0x800)
-        + (cp >= 0x10000);
-}
-
-static inline void utf8_encode(char32_t cp, char8_t dst[5]) {
-    // TODO: implement correctly
-    //dst[0] = cp & 0xff;
-    //dst[1] = '\0';
-
-    mbstate_t ps = {0};
-    c32rtomb((char*) dst, cp, &ps); 
-}
 
 // TODO: replace with proper UTF-8 functions
 
@@ -161,6 +161,10 @@ static inline int utf8_is_blank(char32_t c) {
 
 static inline int utf8_is_print(char32_t c) {
     return c <= 0xff && isprint(c);
+}
+
+static inline int utf8_is_cntrl(char32_t c) {
+    return c <= 0xff && iscntrl(c);
 }
 
 static inline int utf8_is_digit(char32_t c) {
@@ -189,6 +193,63 @@ static inline int utf8_is_upper(char32_t c) {
 
 static inline int utf8_is_alphanum(char32_t c) {
     return c <= 0xff && isalnum(c);
+}
+
+static inline uint8_t utf8_cp_length(char32_t cp) {
+    return 1u
+        + (cp >= 0x80)
+        + (cp >= 0x800)
+        + (cp >= 0x10000);
+}
+
+static inline int utf8_encode(char32_t cp, char8_t dst[CC_UTF8_ENCODE_MAX]) {
+    mbstate_t ps = {0};
+    size_t l = c32rtomb((char*) dst, cp, &ps); 
+    if(l == (size_t) -1)
+        return errno;
+
+    dst[l] = '\0';
+    return 0;
+}
+
+static inline int utf8_encode_printable(char32_t cp, char8_t dst[CC_UTF8_ENCODE_PRINTABLE_MAX]) {
+    int err = 0;
+
+    switch(cp) {
+    case EOF:
+        strncpy((char*) dst, "<end of file>", CC_UTF8_ENCODE_PRINTABLE_MAX);
+        break;
+
+    case '\t':
+        strncpy((char*) dst, "<tab>", CC_UTF8_ENCODE_PRINTABLE_MAX);
+        break;
+
+    case '\v':
+        strncpy((char*) dst, "<vtab>", CC_UTF8_ENCODE_PRINTABLE_MAX);
+        break;
+
+    case '\n':
+        strncpy((char*) dst, "<newline>", CC_UTF8_ENCODE_PRINTABLE_MAX);
+        break;
+
+    case '\r':
+        strncpy((char*) dst, "<cr>", CC_UTF8_ENCODE_PRINTABLE_MAX);
+        break;
+
+    default:
+        if(utf8_is_print(cp)) {
+            char8_t buf[CC_UTF8_ENCODE_MAX];
+            if((err = utf8_encode(cp, buf)))
+                break;
+
+            if(snprintf((char*) dst, CC_UTF8_ENCODE_PRINTABLE_MAX, "'%s'", (char*) buf) < 0)
+                err = errno;
+        }
+        else if(snprintf((char*) dst, CC_UTF8_ENCODE_PRINTABLE_MAX, "<u+%04x>", (uint32_t) cp) < 0)
+            err = errno;
+    }
+
+    return err;
 }
 
 #define DYNARR_INIT { 0, 0, NULL }
@@ -257,6 +318,11 @@ static inline char *format(const char *fmt, ...) {
     va_end(ap);
     return s;
 }
+
+struct cc_grammar {
+    size_t n;
+    struct cc_parser *ps[];
+};
 
 #endif /* CC_INTERNAL_H */
 

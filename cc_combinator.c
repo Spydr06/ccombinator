@@ -198,6 +198,18 @@ struct cc_parser *cc_count(unsigned n, cc_fold_t f, struct cc_parser *a) {
     return p;
 }
 
+struct cc_parser *cc_least(unsigned n, cc_fold_t f, struct cc_parser *a) {
+    struct cc_parser *p = unary_parser(a);
+    if(!p)
+        return NULL;
+
+    p->fold = f;
+    p->type = PARSER_LEAST;
+    p->match.unary.n = n;
+
+    return p;
+}
+
 struct cc_parser *cc_maybe(struct cc_parser *a) {
     struct cc_parser *p = unary_parser(a);
     if(!p)
@@ -205,5 +217,28 @@ struct cc_parser *cc_maybe(struct cc_parser *a) {
 
     p->type = PARSER_MAYBE;
     return p;
+}
+
+struct cc_parser *cc_fix(cc_fix_t f, void *userp) {
+    struct cc_parser *placeholder = parser_allocate();
+    if(!placeholder)
+        return NULL;
+
+    errno = 0;
+    struct cc_parser *real = f(placeholder, userp);
+    if(!real) {
+        if(!errno)
+            errno = EINVAL;
+        return NULL;
+    } 
+
+    cc_parser_copy(placeholder, real);
+
+    real->flags |= PARSER_FLAG_RETAIN_INNER;
+    real->flags &= ~PARSER_FLAG_FREE_DATA;
+
+    parser_free(real);
+
+    return placeholder;
 }
 
