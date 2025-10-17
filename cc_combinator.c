@@ -176,6 +176,26 @@ failure:
     return NULL;
 }
 
+static struct cc_parser *binary_parser(struct cc_parser *lhs, struct cc_parser *rhs) {
+    if(!lhs || !rhs) {
+        errno = EINVAL;
+        goto failure;
+    }
+
+    struct cc_parser *p = parser_allocate();
+    if(!p)
+        goto failure;
+
+    p->match.binary.lhs = lhs;
+    p->match.binary.rhs = rhs;
+
+    return p;
+failure:
+    cc_release(lhs);
+    cc_release(rhs);
+    return NULL;
+}
+
 struct cc_parser *cc_many(cc_fold_t f, struct cc_parser *a) {
     struct cc_parser *p = unary_parser(a);
     if(!p)
@@ -183,6 +203,18 @@ struct cc_parser *cc_many(cc_fold_t f, struct cc_parser *a) {
 
     p->fold = f;
     p->type = PARSER_MANY;
+
+    return p;
+}
+
+struct cc_parser *cc_many_until(cc_fold_t f, struct cc_parser *a, struct cc_parser *end) {
+    struct cc_parser *p = binary_parser(a, end);
+    if(!p)
+        return NULL;
+
+    p->fold = f;
+    p->type = PARSER_MANY_UNTIL;
+
     return p;
 }
 
@@ -219,6 +251,41 @@ struct cc_parser *cc_maybe(struct cc_parser *a) {
     return p;
 }
 
+struct cc_parser *cc_chain(cc_fold_t f, struct cc_parser *a, struct cc_parser *op) {
+    struct cc_parser *p = binary_parser(a, op);
+    if(!p)
+        return NULL;
+
+    p->type = PARSER_CHAIN;
+    p->fold = f;
+
+    return p;
+}
+
+struct cc_parser *cc_postfix(cc_fold_t f, struct cc_parser *a, struct cc_parser *op) {
+    struct cc_parser *p = binary_parser(a, op);
+    if(!p)
+        return NULL;
+
+    p->type = PARSER_POSTFIX;
+    p->fold = f;
+
+    return p;
+}
+
+struct cc_parser *cc_token(struct cc_parser *a) {
+    if(!a) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    struct cc_parser *ws = cc_many(NULL, cc_noreturn(cc_whitespace()));
+    if(!ws)
+        return NULL;
+
+    return cc_and(3, cc_fold_middle, cc_retain(ws), a, ws);
+}
+
 struct cc_parser *cc_fix(cc_fix_t f, void *userp) {
     struct cc_parser *placeholder = parser_allocate();
     if(!placeholder)
@@ -240,5 +307,25 @@ struct cc_parser *cc_fix(cc_fix_t f, void *userp) {
     parser_free(real);
 
     return placeholder;
+}
+
+struct cc_parser *cc_noreturn(struct cc_parser *a) {
+    struct cc_parser *p = unary_parser(a);
+    if(!p)
+        return NULL;
+
+    p->type = PARSER_NORETURN;
+
+    return p;
+}
+
+struct cc_parser *cc_noerror(struct cc_parser *a) {
+    struct cc_parser *p = unary_parser(a);
+    if(!p)
+        return NULL;
+
+    p->type = PARSER_NOERROR;
+
+    return p;
 }
 

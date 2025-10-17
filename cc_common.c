@@ -90,7 +90,7 @@ int cc_err_fprint(struct cc_error *e, FILE *f) {
     if(!msg)
         return errno;
 
-    if(fputs(msg, f) < 0) {
+    if(fprintf(f, "%s\n", msg) < 0) {
         free(msg);
         return errno;
     }
@@ -210,6 +210,7 @@ static struct cc_source *new_source(void) {
     if(!s)
         return NULL;
 
+    s->max_recursion = CC_DEFAULT_MAX_RECURSION;
     s->fd = -1;
 
     return s;
@@ -333,6 +334,11 @@ void *cc_fold_last(size_t n, void **r) {
 void *cc_fold_null(size_t n, void **r) {
     for(size_t i = 0; i < n; i++)
         free(r[i]);
+    return NULL;
+}
+
+void *cc_apply_free(void *r) {
+    free(r);
     return NULL;
 }
 

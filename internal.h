@@ -27,10 +27,14 @@
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
+#define LEN(a) (sizeof((a)) / sizeof((a)[0]))
+
 #define CC_UTF8_ENCODE_MAX (MB_CUR_MAX + 1)
 #define CC_UTF8_ENCODE_PRINTABLE_MAX MAX(CC_UTF8_ENCODE_MAX, 16)
 
 #define CC_UTF8_IS_CONT(x) (((x) & 0xc0) == 0x80)
+
+#define CC_DEFAULT_MAX_RECURSION 1024
 
 enum parser_type : uint16_t {
     PARSER_UNDEFINED = 0,
@@ -49,8 +53,6 @@ enum parser_type : uint16_t {
     PARSER_NONEOF,
     PARSER_ONEOF,
 
-    PARSER_LOOKUP,
-    PARSER_BIND,
 
     // combinators
     PARSER_EXPECT,
@@ -59,9 +61,20 @@ enum parser_type : uint16_t {
     PARSER_AND,
     PARSER_OR,
     PARSER_MANY,
+    PARSER_MANY_UNTIL,
     PARSER_COUNT,
     PARSER_LEAST,
     PARSER_MAYBE,
+    PARSER_CHAIN,
+    PARSER_POSTFIX,
+
+    // control parsers
+    PARSER_LOCATION,
+    PARSER_NORETURN,
+    PARSER_NOERROR,
+
+    PARSER_LOOKUP,
+    PARSER_BIND,
 };
 
 enum parser_flags : uint16_t {
@@ -119,6 +132,11 @@ struct cc_parser {
         } unary;
 
         struct {
+            struct cc_parser *lhs;
+            struct cc_parser *rhs;
+        } binary;
+
+        struct {
             unsigned n;
             struct cc_parser **inner;
         } variadic;
@@ -129,6 +147,7 @@ struct cc_source {
     const char *origin;
 
     int fd;
+    unsigned max_recursion;
 
     const char8_t *buffer;
     size_t buffer_size;
@@ -165,6 +184,14 @@ static inline int utf8_is_print(char32_t c) {
 
 static inline int utf8_is_cntrl(char32_t c) {
     return c <= 0xff && iscntrl(c);
+}
+
+static inline int utf8_is_graph(char32_t c) {
+    return c <= 0xff && isgraph(c);
+}
+
+static inline int utf8_is_punct(char32_t c) {
+    return c <= 0xff && ispunct(c);
 }
 
 static inline int utf8_is_digit(char32_t c) {
@@ -251,6 +278,8 @@ static inline int utf8_encode_printable(char32_t cp, char8_t dst[CC_UTF8_ENCODE_
 
     return err;
 }
+
+__internal struct cc_parser *parser_match(int (*f)(char32_t), const char *what);
 
 #define DYNARR_INIT { 0, 0, NULL }
 #define DYNARR_INIT_CAP 16

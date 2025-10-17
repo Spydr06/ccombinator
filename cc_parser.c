@@ -54,6 +54,8 @@ void parser_free(struct cc_parser* p) {
         case PARSER_COUNT:
         case PARSER_MAYBE:
         case PARSER_LEAST:
+        case PARSER_NOERROR:
+        case PARSER_NORETURN:
             cc_release(p->match.unary.inner);
             break;
         case PARSER_AND:
@@ -63,6 +65,12 @@ void parser_free(struct cc_parser* p) {
             break;
         case PARSER_BIND:
             cc_release(p->match.bind.inner);
+            break;
+        case PARSER_MANY_UNTIL:
+        case PARSER_CHAIN:
+        case PARSER_POSTFIX:
+            cc_release(p->match.binary.lhs);
+            cc_release(p->match.binary.rhs);
             break;
         default:
             break;
@@ -244,7 +252,7 @@ struct cc_parser *cc_noneof(const char32_t chars[]) {
     return p;
 }
 
-static struct cc_parser *parser_match(int (*f)(char32_t), const char *what) {
+__internal struct cc_parser *parser_match(int (*f)(char32_t), const char *what) {
     if(!f) {
         errno = EINVAL;
         return NULL;
@@ -440,6 +448,16 @@ struct cc_parser *cc_lift_val(void *val) {
 
     p->type = PARSER_LIFT;
     p->match.lift.val = val;
+
+    return p;
+}
+
+struct cc_parser *cc_location(void) {
+    struct cc_parser *p = parser_allocate();
+    if(!p)
+        return NULL;
+
+    p->type = PARSER_LOCATION;
 
     return p;
 }
