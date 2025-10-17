@@ -83,6 +83,7 @@ struct cc_location {
 #define CC_ERR_MAX_EXPECTED 16
 
 // represents a parser error that is automatically generated from the provided parser tree
+// this struct has public members to allow for user-generated error messages
 struct cc_error {
     struct cc_location loc;
     const char *filename;
@@ -294,6 +295,10 @@ struct cc_parser *cc_chain(cc_fold_t f, struct cc_parser *a, struct cc_parser *o
 // parser results mimic the form [`p` `op` `op` ... `op`] and are combined using the folding function f
 // if any `op` parser succeeded. otherwise, the result of the first `p` parser is returned directly.
 struct cc_parser *cc_postfix(cc_fold_t f, struct cc_parser *a, struct cc_parser *op);
+
+// runs parser `s`, `a` and `e` in sequence, while only generating values for `a`
+// similar to `cc_and(3, cc_fold_middle, cc_noreturn(s), a, cc_noreturn(e))`
+struct cc_parser *cc_between(struct cc_parser *s, struct cc_parser *a, struct cc_parser *e);
 
 // attempts to parse any number of whitespace, then a and then any number of whitespace again.
 // similar to `cc_and(3, cc_fold_middle, cc_many(cc_whitespace()), a, cc_many(cc_whitespace()))`

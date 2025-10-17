@@ -329,3 +329,10 @@ struct cc_parser *cc_noerror(struct cc_parser *a) {
     return p;
 }
 
+struct cc_parser *cc_between(struct cc_parser *s, struct cc_parser *a, struct cc_parser *e) {
+    if(!s || !a || !e)
+        return NULL;
+
+    return cc_and(3, cc_fold_middle, cc_noreturn(s), a, cc_noreturn(e));
+}
+
