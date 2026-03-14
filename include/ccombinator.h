@@ -261,6 +261,12 @@ struct cc_parser *cc_apply(struct cc_parser *p, cc_apply_t f);
 // no error messages are generated.
 struct cc_parser *cc_not(struct cc_parser* p);
 
+// runs 2 parsers in sequence. similar to `cc_and(2, ...)`
+struct cc_parser *cc_seq(cc_fold_t f, struct cc_parser *a, struct cc_parser *b);
+
+// runs one of the two parsers. similar to `cc_or(2, ...)`
+struct cc_parser *cc_either(struct cc_parser *a, struct cc_parser *b);
+
 // runs `n` parsers in sequence. on success, the results are combined using the folding function `f`.
 struct cc_parser *cc_and(unsigned n, cc_fold_t f, ...);
 struct cc_parser *cc_andv(unsigned n, cc_fold_t f, struct cc_parser **ps);
@@ -321,6 +327,10 @@ struct cc_parser *cc_noreturn(struct cc_parser *p);
 // this can reduce the memory footprint of the parser.
 struct cc_parser *cc_noerror(struct cc_parser *p);
 
+// enables the `FREE_DATA` flag on the parser `p`.
+// when `p` gets deleted, the user data associated with it is passed to `free`.
+struct cc_parser *cc_free_data(struct cc_parser *p);
+
 /*
  * Folding functions
  *
@@ -355,8 +365,6 @@ void *cc_apply_free(void *r);
 struct cc_parser *cc_regex_from(const struct cc_source *s, struct cc_error **e);
 struct cc_parser *cc_regex(const char8_t *re, struct cc_error **e);
 
-void cc_regex_state_release(void);
-
 /*
  * Backus-Naur Form (BNF)
  *
@@ -366,8 +374,6 @@ void cc_regex_state_release(void);
 
 struct cc_grammar *cc_bnf_from(const struct cc_source *s, struct cc_error **e);
 struct cc_grammar *cc_bnf(const char8_t *s, struct cc_error **e);
-
-void cc_bnf_state_release(void);
 
 /*
  * Grammar
@@ -407,6 +413,14 @@ struct cc_source *cc_max_recursion(struct cc_source *s, unsigned max);
 // if an internal error occurred, a non-zero ERRNO value is returned.
 // otherwise, `cc_parse` returns `0` and `r` contains the parsing result as either a value or an error report.
 int cc_parse(const struct cc_source *s, struct cc_parser *p, struct cc_result *r);
+
+/*
+ * Debugging
+ */
+
+// dumps the parser tree into a stream `f` (default: stderr)
+int cc_debug_dump(struct cc_parser *p);
+int cc_debug_fdump(struct cc_parser *p, FILE *f);
 
 /*
  * Versioning

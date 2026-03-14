@@ -66,6 +66,8 @@ void parser_free(struct cc_parser* p) {
         case PARSER_BIND:
             cc_release(p->match.bind.inner);
             break;
+        case PARSER_SEQ:
+        case PARSER_EITHER:
         case PARSER_MANY_UNTIL:
         case PARSER_CHAIN:
         case PARSER_POSTFIX:
@@ -492,6 +494,11 @@ struct cc_parser *cc_bind(const char *name, struct cc_parser *a) {
     p->match.bind.name = name;
     p->match.bind.inner = a;
 
+    return p;
+}
+
+struct cc_parser *cc_free_data(struct cc_parser *p) {
+    p->flags |= PARSER_FLAG_FREE_DATA;
     return p;
 }
 

@@ -58,6 +58,8 @@ enum parser_type : uint16_t {
     PARSER_EXPECT,
     PARSER_APPLY,
     PARSER_NOT,
+    PARSER_SEQ,
+    PARSER_EITHER,
     PARSER_AND,
     PARSER_OR,
     PARSER_MANY,
@@ -75,6 +77,8 @@ enum parser_type : uint16_t {
 
     PARSER_LOOKUP,
     PARSER_BIND,
+
+    PARSER_TYPE_MAX
 };
 
 enum parser_flags : uint16_t {

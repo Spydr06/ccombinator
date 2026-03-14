@@ -697,24 +697,23 @@ cleanup:
     return res;
 }
 
-static int combine_and(struct cc_state *s, const struct cc_parser *p, void **r, struct cc_error *e) {
-    unsigned num_values = p->match.variadic.n;
-    void *values[num_values]; // FIXME: use dynarr on larger n
+static int run_sequenced(struct cc_state *s, void **r, struct cc_error *e, cc_fold_t f, unsigned n, struct cc_parser *const *ps) {
+    void *values[n]; // FIXME: use dynarr on larger n
 
     bool noret_before = !!(s->flags & CC_STATE_FLAG_NORETURN);
     bool noret = noret_before;
-    if(!p->fold)
+    if(!f)
         set_flag(s, CC_STATE_FLAG_NORETURN, noret = true);
         
     int res;
-    for(unsigned i = 0; i < num_values; i++) {
-        res = run_parser(s, p->match.variadic.inner[i], noret ? NULL : &values[i], e);
+    for(unsigned i = 0; i < n; i++) {
+        res = run_parser(s, ps[i], noret ? NULL : &values[i], e);
         if(res == PARSE_FAILURE || res < 0)
             goto cleanup;
     }
 
-    if(!noret && p->fold)
-        *r = p->fold(num_values, values);
+    if(!noret && f)
+        *r = f(n, values);
     
     res = PARSE_SUCCESS;
 cleanup:
@@ -722,16 +721,36 @@ cleanup:
     return res;
 }
 
-static int combine_or(struct cc_state *s, const struct cc_parser *p, void **r, struct cc_error *e) {
-    unsigned num_values = p->match.variadic.n;
+static int combine_seq(struct cc_state *s, const struct cc_parser *p, void **r, struct cc_error *e) {
+    return run_sequenced(s, r, e, p->fold, 2, (struct cc_parser* const[]){
+        p->match.binary.lhs,
+        p->match.binary.rhs
+    });
+}
 
-    for(unsigned i = 0; i < num_values; i++) {
-        int res = run_parser(s, p->match.variadic.inner[i], r, e);
+static int combine_and(struct cc_state *s, const struct cc_parser *p, void **r, struct cc_error *e) {
+    return run_sequenced(s, r, e, p->fold, p->match.variadic.n, p->match.variadic.inner);
+}
+
+static int try_sequenced(struct cc_state *s, void **r, struct cc_error *e, unsigned n, struct cc_parser *const *ps) {
+    for(unsigned i = 0; i < n; i++) {
+        int res = run_parser(s, ps[i], r, e);
         if(res == PARSE_SUCCESS || res < 0)
             return res;
     }
 
     return PARSE_FAILURE;
+}
+
+static int combine_either(struct cc_state *s, const struct cc_parser *p, void **r, struct cc_error *e) {
+    return try_sequenced(s, r, e, 2, (struct cc_parser *const[]){
+        p->match.binary.lhs,
+        p->match.binary.rhs
+    });
+}
+
+static int combine_or(struct cc_state *s, const struct cc_parser *p, void **r, struct cc_error *e) {
+    return try_sequenced(s, r, e, p->match.variadic.n, p->match.variadic.inner);
 }
 
 static int run_parser(struct cc_state *s, const struct cc_parser *p, void **r, struct cc_error *e) {
@@ -787,6 +806,9 @@ static int run_parser(struct cc_state *s, const struct cc_parser *p, void **r, s
 
         case PARSER_CHAIN:      PROP(s, combine_chain(s, p, r, e));
         case PARSER_POSTFIX:    PROP(s, combine_postfix(s, p, r, e));
+
+        case PARSER_SEQ:        PROP(s, combine_seq(s, p, r, e));
+        case PARSER_EITHER:     PROP(s, combine_either(s, p, r, e));
 
         case PARSER_AND:        PROP(s, combine_and(s, p, r, e));
         case PARSER_OR:         PROP(s, combine_or(s, p, r, e));

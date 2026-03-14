@@ -92,6 +92,42 @@ failure:
     return NULL;
 }
 
+static struct cc_parser *binary_parser(struct cc_parser *lhs, struct cc_parser *rhs) {
+    if(!lhs || !rhs) {
+        errno = EINVAL;
+        goto failure;
+    }
+
+    struct cc_parser *p = parser_allocate();
+    if(!p)
+        goto failure;
+
+    p->match.binary.lhs = lhs;
+    p->match.binary.rhs = rhs;
+
+    return p;
+failure:
+    cc_release(lhs);
+    cc_release(rhs);
+    return NULL;
+}
+
+static struct cc_parser *variadic_parser_from_arr(unsigned n, struct cc_parser **ps) {
+    if(!ps) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    struct cc_parser *p = parser_allocate();
+    if(!p)
+        return NULL;
+
+    p->match.variadic.n = n;
+    p->match.variadic.inner = ps;
+
+    return p;
+}
+
 static struct cc_parser *variadic_parser(unsigned n, va_list ap) {
     va_list ap_copy;
     va_copy(ap_copy, ap);
@@ -110,13 +146,8 @@ static struct cc_parser *variadic_parser(unsigned n, va_list ap) {
         }
     }
     
-    struct cc_parser *p = parser_allocate();
-    if(!p)
-        goto failure;
-
+    struct cc_parser *p = variadic_parser_from_arr(n, ps);
     p->flags |= PARSER_FLAG_FREE_DATA;
-    p->match.variadic.n = n;
-    p->match.variadic.inner = ps;
 
     va_end(ap_copy);
     return p;
@@ -129,6 +160,27 @@ failure:
     va_end(ap_copy);
     free(ps);
     return NULL;
+}
+
+struct cc_parser *cc_seq(cc_fold_t f, struct cc_parser *a, struct cc_parser *b) {
+    struct cc_parser *p = binary_parser(a, b);
+    if(!p)
+        return NULL;
+    
+    p->type = PARSER_SEQ;
+    p->fold = f;
+
+    return p;
+}
+
+struct cc_parser *cc_either(struct cc_parser *a, struct cc_parser *b) {
+    struct cc_parser *p = binary_parser(a, b);
+    if(!p)
+        return NULL;
+
+    p->type = PARSER_EITHER;
+
+    return p;
 }
 
 struct cc_parser *cc_and(unsigned n, cc_fold_t f, ...) {
@@ -145,12 +197,31 @@ struct cc_parser *cc_and(unsigned n, cc_fold_t f, ...) {
     return p;
 }
 
+struct cc_parser *cc_andv(unsigned n, cc_fold_t f, struct cc_parser **ps) {
+    struct cc_parser *p = variadic_parser_from_arr(n, ps);
+    if(!p)
+        return NULL;
+
+    p->fold = f;
+    p->type = PARSER_AND;
+    return p;
+}
+
 struct cc_parser *cc_or(unsigned n, ...) {
     va_list ap;
     va_start(ap, n);
     struct cc_parser *p = variadic_parser(n, ap);
     va_end(ap);
 
+    if(!p)
+        return NULL;
+
+    p->type = PARSER_OR;
+    return p;
+}
+
+struct cc_parser *cc_orv(unsigned n, struct cc_parser **ps) {
+    struct cc_parser *p = variadic_parser_from_arr(n, ps);
     if(!p)
         return NULL;
 
@@ -173,26 +244,6 @@ static struct cc_parser *unary_parser(struct cc_parser *a) {
     return p;
 failure:
     cc_release(a);
-    return NULL;
-}
-
-static struct cc_parser *binary_parser(struct cc_parser *lhs, struct cc_parser *rhs) {
-    if(!lhs || !rhs) {
-        errno = EINVAL;
-        goto failure;
-    }
-
-    struct cc_parser *p = parser_allocate();
-    if(!p)
-        goto failure;
-
-    p->match.binary.lhs = lhs;
-    p->match.binary.rhs = rhs;
-
-    return p;
-failure:
-    cc_release(lhs);
-    cc_release(rhs);
     return NULL;
 }
 
