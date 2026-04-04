@@ -115,6 +115,8 @@ free_data:
     }
     
 free_self:
+    if(p->ir)
+        free(p->ir);
     free(p);
 }
 

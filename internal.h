@@ -3,10 +3,12 @@
 
 #include <ccombinator.h>
 
+#include <assert.h>
 #include <ctype.h>
 #include <errno.h>
 #include <memory.h>
 #include <stdarg.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,6 +28,7 @@
 #endif
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
 
 #define LEN(a) (sizeof((a)) / sizeof((a)[0]))
 
@@ -35,6 +38,9 @@
 #define CC_UTF8_IS_CONT(x) (((x) & 0xc0) == 0x80)
 
 #define CC_DEFAULT_MAX_RECURSION 1024
+
+#define PARSE_SUCCESS 1
+#define PARSE_FAILURE 0
 
 enum parser_type : uint16_t {
     PARSER_UNDEFINED = 0,
@@ -52,7 +58,6 @@ enum parser_type : uint16_t {
     PARSER_ANYOF,
     PARSER_NONEOF,
     PARSER_ONEOF,
-
 
     // combinators
     PARSER_EXPECT,
@@ -81,6 +86,10 @@ enum parser_type : uint16_t {
     PARSER_TYPE_MAX
 };
 
+static inline bool is_combinator(enum parser_type p) {
+    return (p >= PARSER_EXPECT && p <= PARSER_POSTFIX) || (p >= PARSER_NORETURN && p <= PARSER_BIND && p != PARSER_LOOKUP);
+}
+
 enum parser_flags : uint16_t {
     PARSER_FLAG_FREE_DATA = 0x01,
     PARSER_FLAG_RETAIN_INNER = 0x02
@@ -93,6 +102,7 @@ struct cc_parser {
     uint32_t rc;
 
     cc_fold_t fold;
+    struct cc_ir *ir;
 
     union {
         char32_t ch;
@@ -158,6 +168,85 @@ struct cc_source {
 
     int (*buffer_dtor)(const char8_t *buffer);
 };
+
+enum cc_ir_opcode : uint8_t {
+    IR_PUSH = 0x01,  // push uint32_t on the stack
+    IR_POP,     // pop 
+    IR_SWAP,    // swap two top stack entries
+    IR_DUP,     // duplicate top stack element
+    IR_NEGATE,  // negate the top stack element
+    IR_INCREMENT, // increment the top stack element
+    IR_DECREMENT, // decrement the top stack element
+
+    IR_SAVE_LOCATION,
+    IR_RESTORE_LOCATION,
+    IR_SET_NOERROR, // set the noerror flag
+    IR_SET_NORETURN, // set the noretun flag
+
+    IR_CALL,
+    IR_RETURN,
+
+    IR_FOLD,
+    IR_APPLY,
+    IR_EXPECT,
+    IR_PUSH_BINDING,
+    IR_POP_BINDING,
+    IR_NULL_RESULT,
+    IR_POP_RESULT,
+
+    IR_JUMP,
+    IR_JUMP_IF_NONZERO,
+    IR_JUMP_IF_SUCCESS,
+    IR_JUMP_IF_FAILURE,
+};
+
+#define IR_UNROLL_THRESHOLD 8
+
+#define IR_INIT_CAPACITY 16
+#define IR_ALLOC_SIZE(cap) MAX(sizeof(struct cc_ir), offsetof(struct cc_ir, bytes) + (cap)) 
+
+struct cc_ir {
+    uint32_t count;
+    uint32_t capacity;
+    uint8_t bytes[];
+};
+
+__internal int cc_compile(struct cc_parser *p);
+
+__internal int ir_dump(const struct cc_ir *ir, FILE *f);
+__internal const char *ir_str_opcode(enum cc_ir_opcode opcode);
+
+static inline uint32_t ir_read_u32(const struct cc_ir *ir, uint32_t ip) {
+    assert(ir->count - ip >= sizeof(uint32_t));
+    uint32_t c = 0;
+    for(unsigned i = 0; i < sizeof(uint32_t); i++) {
+        c |= (uint32_t) ir->bytes[ip + i] << ((sizeof(uint32_t) - i - 1) * 8);
+    }
+    return c;
+}
+
+static inline uintptr_t ir_read_ptr(const struct cc_ir *ir, uint32_t ip) {
+    assert(ir->count - ip >= sizeof(uintptr_t));
+    uintptr_t c = 0;
+    for(unsigned i = 0; i < sizeof(uintptr_t); i++) {
+        c |= (uintptr_t) ir->bytes[ip + i] << ((sizeof(uintptr_t) - i - 1) * 8);
+    }
+    return c;
+}
+
+static inline void ir_write_u32(struct cc_ir *ir, uint32_t ip, uint32_t p) {
+    assert(ir->count - ip >= sizeof(uint32_t));
+    for(unsigned i = 0; i < sizeof(uint32_t); i++) {
+        ir->bytes[ip + i] = (p >> ((sizeof(uint32_t) - i - 1) * 8)) & 0xff;
+    }
+}
+
+static inline void ir_write_ptr(struct cc_ir *ir, uint32_t ip, uintptr_t p) {
+    assert(ir->count - ip >= sizeof(uintptr_t));
+    for(unsigned i = 0; i < sizeof(uintptr_t); i++) {
+        ir->bytes[ip + i] = (p >> ((sizeof(uintptr_t) - i - 1) * 8)) & 0xff;
+    }
+}
 
 static inline char32_t utf8_first_cp(const uint8_t *s) {
     uint32_t k = s[0] ? __builtin_clz(~(s[0] << 24)) : 0;

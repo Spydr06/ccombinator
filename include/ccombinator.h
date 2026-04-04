@@ -139,7 +139,7 @@ struct cc_parser *cc_retain(struct cc_parser *p);
 void cc_parser_copy(struct cc_parser *d, const struct cc_parser* s);
 
 /*
- * Primitive Parsers -> cc_parser.c
+ * Terminal Parsers -> cc_parser.c
  *
  * the following funtions construct primitive and otherwise useful basic parsers.
  * if an internal error occurrs, NULL is retuned and `errno` set to an error code.
@@ -280,7 +280,7 @@ struct cc_parser *cc_orv(unsigned n, struct cc_parser **ps);
 // parser results are combined using the folding function `f`.
 struct cc_parser *cc_many(cc_fold_t f, struct cc_parser *p);
 
-// runs parser `p` until parser `end` succeeds.
+// runs parser `a` until parser `end` succeeds.
 // parser results are combined using the folding function `f`.
 struct cc_parser *cc_many_until(cc_fold_t f, struct cc_parser *a, struct cc_parser *end);
 
@@ -293,12 +293,12 @@ struct cc_parser *cc_count(unsigned n, cc_fold_t f, struct cc_parser *p);
 struct cc_parser *cc_least(unsigned n, cc_fold_t f, struct cc_parser *p);
 
 // runs parser `a` and a sequence of parsers `op`, `p` until `op` fails.
-// parser results mimic the form [`p` `op` `p` `op` ... `p`] and are combined using the folding function f 
+// parser results mimic the form [`a` `op` `a` `op` ... `a`] and are combined using the folding function f 
 // if any `op` parser succeeded. otherwise, the result of the first `p` parser is returned directly.
 struct cc_parser *cc_chain(cc_fold_t f, struct cc_parser *a, struct cc_parser *op);
 
 // runs parser `a` once and a sequence of parser `op`.
-// parser results mimic the form [`p` `op` `op` ... `op`] and are combined using the folding function f
+// parser results mimic the form [`a` `op` `op` ... `op`] and are combined using the folding function f
 // if any `op` parser succeeded. otherwise, the result of the first `p` parser is returned directly.
 struct cc_parser *cc_postfix(cc_fold_t f, struct cc_parser *a, struct cc_parser *op);
 

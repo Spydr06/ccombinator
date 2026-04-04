@@ -2,11 +2,13 @@
 
 #include "internal.h"
 
-#include <errno.h>
-#include <memory.h>
-
+#include <alloca.h>
 #include <assert.h>
+#include <errno.h>
 #include <locale.h>
+#include <memory.h>
+#include <stdint.h>
+#include <stdio.h>
 
 #define CC_STATE_FLAGS_DEFAULT  0x00
 #define CC_STATE_FLAG_EOF       0x01
@@ -32,17 +34,14 @@ struct cc_save {
     unsigned recursion_depth;
 };
 
-#define PARSE_SUCCESS 1
-#define PARSE_FAILURE 0
-
 #define PROP(s, x) do {                             \
-        assert((s)->recursion_depth > 0);           \
-        (s)->recursion_depth--;                     \
+/*        assert((s)->recursion_depth > 0);           \
+        (s)->recursion_depth--;            */         \
         return (x);                                 \
     } while(0)
 
-#define FAIL_WITH(e, s, x) do {                     \
-        int err = new_error((e), (s), (x));         \
+#define FAIL_WITH(e, s, x, c) do {                  \
+        int err = new_error((e), (s), (x), (c));    \
         PROP(s, err ? -err : PARSE_FAILURE);        \
     } while(0)
 
@@ -51,8 +50,6 @@ struct cc_save {
             (r) = (x);                              \
         PROP(s, PARSE_SUCCESS);                     \
     } while(0)
-
-static int run_parser(struct cc_state *s, const struct cc_parser *p, void **r, struct cc_error *e);
 
 static inline bool set_flag(struct cc_state *s, int flag, bool state) {
     bool before = !!(s->flags & flag);
@@ -74,40 +71,22 @@ static inline char32_t peek_at(struct cc_state *s) {
     return utf8_first_cp(s->src->buffer + s->loc.byte_off);
 }
 
-static inline struct cc_save state_save(const struct cc_state *s) {
-    return (struct cc_save){
-        .loc = s->loc,
-        .flags = s->flags,
-        .scope_len = s->scope.len,
-        .recursion_depth = s->recursion_depth
-    };
-}
-
-static inline void state_restore(struct cc_state *s, const struct cc_save *save) {
-    assert(s->scope.len >= save->scope_len);
-    assert(s->recursion_depth == save->recursion_depth); // safety check
-
-    s->loc = save->loc;
-    s->flags = save->flags;
-    s->scope.len = save->scope_len;
-}
-
 static inline void state_free(struct cc_state *s) {
     free(s->scope.elems);
 }
 
-static inline int scope_push(struct cc_state *s, const struct cc_parser *p) {
+static inline int scope_push(struct cc_state *s, struct cc_parser *p) {
     assert(p->type == PARSER_BIND);
     return dynarr_append(&s->scope, (void*) p);
 }
 
-static inline const struct cc_parser *scope_pop(struct cc_state *s) {
+static inline struct cc_parser *scope_pop(struct cc_state *s) {
     assert(s->scope.len > 0);
 
     return s->scope.elems[--s->scope.len];
 }
 
-static const struct cc_parser *scope_lookup(struct cc_state *s, const char *name) {
+static struct cc_parser *scope_lookup(struct cc_state *s, const char *name) {
     // TODO: maybe use some sort of hashing to avoid strcmp?
 
     for(size_t i = s->scope.len; i > 0; i--) {
@@ -120,7 +99,7 @@ static const struct cc_parser *scope_lookup(struct cc_state *s, const char *name
     return NULL;
 }
 
-static int new_error(struct cc_error *e, struct cc_state *s, const char *msg) {
+static int new_error(struct cc_error *e, struct cc_state *s, const char *msg, bool copy) {
     if(s->flags & CC_STATE_FLAG_NOERR)
         return 0;
 
@@ -131,8 +110,10 @@ static int new_error(struct cc_error *e, struct cc_state *s, const char *msg) {
 
     e->loc = s->loc;
     e->received = peek_at(s);
-    if(!(e->failure = strdup(msg)))
+    if(copy && !(e->failure = strdup(msg)))
         return errno;
+    else if(!copy)
+        e->failure = msg;
 
     return 0;
 }
@@ -354,406 +335,7 @@ static int match_string(struct cc_state *s, const char8_t *str, void **r) {
     return PARSE_SUCCESS;
 }
 
-static int combine_many(struct cc_state *s, const struct cc_parser *p, void **r) {
-    struct dynarr values = DYNARR_INIT;
-
-    bool noerr_before = set_flag(s, CC_STATE_FLAG_NOERR, true);
-    bool noret_before = !!(s->flags & CC_STATE_FLAG_NORETURN);
-    bool noret = noret_before;
-    if(!p->fold)
-        set_flag(s, CC_STATE_FLAG_NORETURN, noret = true);
-
-    int res, err;
-
-    for(;;) {
-        void *val = NULL;
-        struct cc_save save = state_save(s);
-
-        res = run_parser(s, p->match.unary.inner, noret ? NULL : &val, NULL);
-        if(res == PARSE_FAILURE) {
-            state_restore(s, &save);
-            break;
-        }
-        if(res < 0)
-            goto cleanup;
-
-        if(!noret && (err = dynarr_append(&values, val))) {
-            res = -err;
-            goto cleanup;
-        }
-    }
-
-    if(!noret && p->fold)
-        *r = p->fold(values.len, values.elems);
- 
-cleanup:
-    set_flag(s, CC_STATE_FLAG_NOERR, noerr_before);
-    set_flag(s, CC_STATE_FLAG_NORETURN, noret_before);
-
-    dynarr_free(&values);
-    return PARSE_SUCCESS;
-}
-
-static int combine_many_until(struct cc_state *s, const struct cc_parser *p, void **r, struct cc_error *e) {
-    struct dynarr values = DYNARR_INIT;
-    int res, err;
-
-    struct cc_parser *a = p->match.binary.lhs;
-    struct cc_parser *end = p->match.binary.rhs;
-
-    bool noret_before = !!(s->flags & CC_STATE_FLAG_NORETURN);
-    bool noret = noret_before;
-    if(!p->fold)
-        set_flag(s, CC_STATE_FLAG_NORETURN, noret = true);
-
-    for(;;) {
-        void *val;
-
-        {
-            bool noerr_before = set_flag(s, CC_STATE_FLAG_NOERR, true);
-            struct cc_save save = state_save(s);
-
-            if((res = run_parser(s, end, noret ? NULL : &val, NULL)) < 0)
-                goto cleanup; 
-
-            set_flag(s, CC_STATE_FLAG_NOERR, noerr_before);
-            if(res == PARSE_SUCCESS) {
-                if(!noret && (err = dynarr_append(&values, val))) {
-                    res = -err;
-                    goto cleanup;
-                }
-                break;
-            }
-
-            state_restore(s, &save);
-        }
-        
-        {
-            bool noerr_before = set_flag(s, CC_STATE_FLAG_NOERR, true);
-            struct cc_save save = state_save(s);
-
-            if((res = run_parser(s, a, noret ? NULL : &val, NULL)) < 0)
-                goto cleanup; 
-
-            set_flag(s, CC_STATE_FLAG_NOERR, noerr_before);
-            if(res == PARSE_SUCCESS) {
-                if(!noret && (err = dynarr_append(&values, val))) {
-                    res = -err;
-                    goto cleanup;
-                }
-                continue;
-            }
-
-            state_restore(s, &save);
-        }
-
-        if((res = run_parser(s, end, noret ? NULL : &val, e)) < 0)
-            goto cleanup;
-        
-        break;
-    }
-
-    if(!noret)
-        *r = p->fold(values.len, values.elems);
-
-cleanup:
-    set_flag(s, CC_STATE_FLAG_NORETURN, noret_before);
-    dynarr_free(&values);
-    return res;
-}
-
-static int combine_count(struct cc_state *s, const struct cc_parser *p, void **r, struct cc_error *e) { 
-    unsigned num_values = p->match.unary.n;
-    void *values[num_values]; // FIXME: use dynarr on larger n to avoid stackoverflows
-    
-    bool noret_before = !!(s->flags & CC_STATE_FLAG_NORETURN);
-    bool noret = noret_before;
-    if(!p->fold)
-        set_flag(s, CC_STATE_FLAG_NORETURN, noret = true);
-
-    int res;
-    for(unsigned i = 0; i < num_values; i++) {
-        res = run_parser(s, p->match.unary.inner, noret ? NULL : &values[i], e);
-        if(res == PARSE_FAILURE || res < 0)
-            goto cleanup;
-    }
-
-    if(!noret)
-        *r = p->fold(num_values, values);
-
-    res = PARSE_SUCCESS;
-cleanup:
-    set_flag(s, CC_STATE_FLAG_NORETURN, noret_before);
-    return res;
-}
-
-static int combine_least(struct cc_state *s, const struct cc_parser *p, void **r, struct cc_error *e) {
-    struct dynarr values = DYNARR_INIT;
-
-    int res;
-
-    bool noerr_before = !!(s->flags & CC_STATE_FLAG_NOERR);
-    bool noret_before = !!(s->flags & CC_STATE_FLAG_NORETURN);
-    bool noret = noret_before;
-    if(!p->fold)
-        set_flag(s, CC_STATE_FLAG_NORETURN, noret = true);
-
-    for(unsigned i = 0;; i++) {
-        bool required = i < p->match.unary.n;
-        if(!required)
-            set_flag(s, CC_STATE_FLAG_NOERR, true);
-
-        void *val = NULL;
-        struct cc_save save = state_save(s);
-
-        res = run_parser(s, p->match.unary.inner, noret ? NULL : &val, required ? e : NULL);
-        if(res == PARSE_FAILURE) {
-            state_restore(s, &save);
-            if(!required)
-                break;
-
-            goto cleanup;
-        }
-        if(res < 0)
-            goto cleanup;
-
-        int err;
-        if(!noret && (err = dynarr_append(&values, val))) {
-            res = -err;
-            goto cleanup;
-        }
-    }
-
-    res = PARSE_SUCCESS;
-
-    if(!noret)
-        *r = p->fold(values.len, values.elems);
- 
-cleanup:
-    set_flag(s, CC_STATE_FLAG_NORETURN, noret_before);
-    set_flag(s, CC_STATE_FLAG_NOERR, noerr_before);
-
-    dynarr_free(&values);
-    return res;
-}
-
-static int combine_not(struct cc_state *s, const struct cc_parser *p) {
-    struct cc_save save = state_save(s);
-
-    bool noerr_before = set_flag(s, CC_STATE_FLAG_NOERR, true);
-    bool noret_before = set_flag(s, CC_STATE_FLAG_NORETURN, true);
-
-    int res = run_parser(s, p->match.unary.inner, NULL, NULL);
-
-    set_flag(s, CC_STATE_FLAG_NORETURN, noret_before);
-    set_flag(s, CC_STATE_FLAG_NOERR, noerr_before);
-
-    if(res < 0)
-        return res;
-
-    if(res == PARSE_SUCCESS) {
-        state_restore(s, &save);
-        return PARSE_FAILURE;
-    }
-
-    return PARSE_SUCCESS;
-}
-
-static int combine_maybe(struct cc_state *s, const struct cc_parser *p, void **r) {
-    struct cc_save save = state_save(s);
-
-    bool noerr_before = set_flag(s, CC_STATE_FLAG_NOERR, true);
-
-    int res = run_parser(s, p->match.unary.inner, r, NULL);
-    if(res < 0)
-        return res;
-
-    set_flag(s, CC_STATE_FLAG_NOERR, noerr_before);
-
-    if(res == PARSE_FAILURE) {
-        if(!(s->flags & CC_STATE_FLAG_NORETURN))
-            *r = NULL;
-        state_restore(s, &save);
-    }
-
-    return PARSE_SUCCESS;
-}
-
-static int combine_chain(struct cc_state *s, const struct cc_parser *p, void **r, struct cc_error *e) {
-    struct dynarr values = DYNARR_INIT;
-    
-    struct cc_parser *a = p->match.binary.lhs;
-    struct cc_parser *op = p->match.binary.rhs;
-
-    bool noret_before = !!(s->flags & CC_STATE_FLAG_NORETURN);
-    bool noret = noret_before;
-    if(!p->fold)
-        set_flag(s, CC_STATE_FLAG_NORETURN, noret = true);
-
-    void *val;
-    int res = run_parser(s, a, noret ? NULL : &val, e);
-    if(res != PARSE_SUCCESS)
-        goto cleanup;
-
-    int err;
-    if(!noret && (err = dynarr_append(&values, val))) {
-        res = -err;
-        goto cleanup;
-    }
-
-    for(;;) {
-        struct cc_save save = state_save(s);
-        bool noerr_before = set_flag(s, CC_STATE_FLAG_NOERR, true);
-
-        if((res = run_parser(s, op, noret ? NULL : &val, NULL)) < 0)
-            goto cleanup;
-
-        set_flag(s, CC_STATE_FLAG_NOERR, noerr_before);
-        if(res == PARSE_FAILURE) {
-            state_restore(s, &save);
-            break;
-        }
-
-        if(!noret && (err = dynarr_append(&values, val))) {
-            res = -err;
-            goto cleanup;
-        }
-
-        if((res = run_parser(s, a, noret ? NULL : &val, e)) != PARSE_SUCCESS)
-            goto cleanup;
-
-        if(!noret && (err = dynarr_append(&values, val))) {
-            res = -err;
-            goto cleanup;
-        }
-    }
-
-    if(!noret) {
-        assert(values.len > 0);
-
-        if(values.len > 1)
-            *r = p->fold(values.len, values.elems);
-        else
-            *r = values.elems[0];
-    }
-
-    res = PARSE_SUCCESS;
-cleanup:
-    set_flag(s, CC_STATE_FLAG_NORETURN, noret_before);
-    dynarr_free(&values);
-    return res;
-}
-
-static int combine_postfix(struct cc_state *s, const struct cc_parser *p, void **r, struct cc_error *e) {
-    struct dynarr values = DYNARR_INIT;
-
-    struct cc_parser *a = p->match.binary.lhs;
-    struct cc_parser *op = p->match.binary.rhs;
-
-    bool noret_before = !!(s->flags & CC_STATE_FLAG_NORETURN);
-    bool noret = noret_before;
-    if(!p->fold)
-        set_flag(s, CC_STATE_FLAG_NORETURN, noret = true);
-
-    void *val;
-    int res = run_parser(s, a, noret ? NULL : &val, e);
-    if(res != PARSE_SUCCESS)
-        goto cleanup;
-
-    if(!noret)
-        dynarr_append(&values, val);
-
-    for(;;) {
-        struct cc_save save = state_save(s);
-        bool noerr_before = set_flag(s, CC_STATE_FLAG_NOERR, true);
-
-        if((res = run_parser(s, op, noret ? NULL : &val, NULL)) < 0)
-            goto cleanup;
-
-        set_flag(s, CC_STATE_FLAG_NOERR, noerr_before);
-        if(res == PARSE_FAILURE) {
-            state_restore(s, &save);
-            break;
-        }
-
-        int err;
-        if(!noret && (err = dynarr_append(&values, val))) {
-            res = -err;
-            goto cleanup;
-        }
-    }
-
-    if(!noret) {
-        if(values.len > 1)
-            *r = p->fold(values.len, values.elems);
-        else
-            *r = values.elems[0];
-    }
-
-    res = PARSE_SUCCESS;
-cleanup:
-    set_flag(s, CC_STATE_FLAG_NORETURN, noret_before);
-    dynarr_free(&values);
-    return res;
-}
-
-static int run_sequenced(struct cc_state *s, void **r, struct cc_error *e, cc_fold_t f, unsigned n, struct cc_parser *const *ps) {
-    void *values[n]; // FIXME: use dynarr on larger n
-
-    bool noret_before = !!(s->flags & CC_STATE_FLAG_NORETURN);
-    bool noret = noret_before;
-    if(!f)
-        set_flag(s, CC_STATE_FLAG_NORETURN, noret = true);
-        
-    int res;
-    for(unsigned i = 0; i < n; i++) {
-        res = run_parser(s, ps[i], noret ? NULL : &values[i], e);
-        if(res == PARSE_FAILURE || res < 0)
-            goto cleanup;
-    }
-
-    if(!noret && f)
-        *r = f(n, values);
-    
-    res = PARSE_SUCCESS;
-cleanup:
-    set_flag(s, CC_STATE_FLAG_NORETURN, noret_before);
-    return res;
-}
-
-static int combine_seq(struct cc_state *s, const struct cc_parser *p, void **r, struct cc_error *e) {
-    return run_sequenced(s, r, e, p->fold, 2, (struct cc_parser* const[]){
-        p->match.binary.lhs,
-        p->match.binary.rhs
-    });
-}
-
-static int combine_and(struct cc_state *s, const struct cc_parser *p, void **r, struct cc_error *e) {
-    return run_sequenced(s, r, e, p->fold, p->match.variadic.n, p->match.variadic.inner);
-}
-
-static int try_sequenced(struct cc_state *s, void **r, struct cc_error *e, unsigned n, struct cc_parser *const *ps) {
-    for(unsigned i = 0; i < n; i++) {
-        int res = run_parser(s, ps[i], r, e);
-        if(res == PARSE_SUCCESS || res < 0)
-            return res;
-    }
-
-    return PARSE_FAILURE;
-}
-
-static int combine_either(struct cc_state *s, const struct cc_parser *p, void **r, struct cc_error *e) {
-    return try_sequenced(s, r, e, 2, (struct cc_parser *const[]){
-        p->match.binary.lhs,
-        p->match.binary.rhs
-    });
-}
-
-static int combine_or(struct cc_state *s, const struct cc_parser *p, void **r, struct cc_error *e) {
-    return try_sequenced(s, r, e, p->match.variadic.n, p->match.variadic.inner);
-}
-
-static int run_parser(struct cc_state *s, const struct cc_parser *p, void **r, struct cc_error *e) {
+static int call_terminal(struct cc_state *s, const struct cc_parser *p, void **r, struct cc_error *e) {
     if(!s || !p)
         return EINVAL;
 
@@ -763,11 +345,8 @@ static int run_parser(struct cc_state *s, const struct cc_parser *p, void **r, s
         *r = NULL;
     }
 
-    if(s->max_recursion_depth && ++s->recursion_depth > s->max_recursion_depth)
-        FAIL_WITH(e, s, format("maximum recursion depth of `%u` reached", s->max_recursion_depth)); 
-
     switch(p->type) {
-        case PARSER_FAIL:       FAIL_WITH(e, s, (char*) p->match.msg);
+        case PARSER_FAIL:       FAIL_WITH(e, s, (char*) p->match.msg, true);
 
         case PARSER_PASS:       SUCCESS(r, s, NULL);
         
@@ -796,92 +375,402 @@ static int run_parser(struct cc_state *s, const struct cc_parser *p, void **r, s
 
         case PARSER_STRING:     PROP(s, match_string(s, p->match.str, r));
 
-        case PARSER_MANY:       PROP(s, combine_many(s, p, r));
-        case PARSER_MANY_UNTIL: PROP(s, combine_many_until(s, p, r, e));
-
-        case PARSER_COUNT:      PROP(s, combine_count(s, p, r, e));
-        case PARSER_LEAST:      PROP(s, combine_least(s, p, r, e));
-
-        case PARSER_MAYBE:      PROP(s, combine_maybe(s, p, r));
-
-        case PARSER_CHAIN:      PROP(s, combine_chain(s, p, r, e));
-        case PARSER_POSTFIX:    PROP(s, combine_postfix(s, p, r, e));
-
-        case PARSER_SEQ:        PROP(s, combine_seq(s, p, r, e));
-        case PARSER_EITHER:     PROP(s, combine_either(s, p, r, e));
-
-        case PARSER_AND:        PROP(s, combine_and(s, p, r, e));
-        case PARSER_OR:         PROP(s, combine_or(s, p, r, e));
-
-        case PARSER_NOT:        PROP(s, combine_not(s, p));
-
-        case PARSER_EXPECT: {
-            assert(p->match.expect.inner);
-
-            int res = run_parser(s, p->match.expect.inner, r, e);
-            if(res == PARSE_SUCCESS || res < 0)
-                PROP(s, res);
-            
-            int err = add_expected(e, s, p->match.expect.what);
-            if(err)
-                PROP(s, -err);
-
-            PROP(s, PARSE_FAILURE);
-        }
-
-        case PARSER_APPLY: {
-            int res = run_parser(s, p->match.expect.inner, r, e);
-            if(res != PARSE_SUCCESS)
-                PROP(s, res);
-
-            if(!(s->flags & CC_STATE_FLAG_NORETURN) && p->match.apply.af)
-                *r = p->match.apply.af(*r);
-
-            PROP(s, res);
-        }
-
-        case PARSER_NORETURN: {
-            bool noreturn_before = set_flag(s, CC_STATE_FLAG_NORETURN, true) ;
-
-            int res = run_parser(s, p->match.unary.inner, NULL, e);
-
-            set_flag(s, CC_STATE_FLAG_NORETURN, noreturn_before);
-            PROP(s, res);
-        }
-
-        case PARSER_NOERROR: {
-            bool noerr_before = set_flag(s, CC_STATE_FLAG_NOERR, true);
-
-            int res = run_parser(s, p->match.unary.inner, r, NULL);
-
-            set_flag(s, CC_STATE_FLAG_NOERR, noerr_before);
-            PROP(s, res);
-        }
-
-        case PARSER_BIND: {
-            int err = scope_push(s, p);
-            if(err)
-                PROP(s, -err);
-
-            int res = run_parser(s, p->match.bind.inner, r, e);
-            
-            if(scope_pop(s) != p)
-                assert(false);
-
-            PROP(s, res);
-        }
-
-        case PARSER_LOOKUP: {
-            const struct cc_parser *found = scope_lookup(s, p->match.lookup);
-            if(!found)
-                FAIL_WITH(e, s, format("undefined parser \"%s\"", p->match.lookup));
-
-            PROP(s, run_parser(s, found, r, e));
-        }
-
-        case PARSER_UNDEFINED:
-        default:                FAIL_WITH(e, s, format("undefined parser %d", p->type));
+        default:                FAIL_WITH(e, s, format("undefined parser %d", p->type), false);
     }
+}
+
+struct data_stack {
+    size_t count;
+    size_t capacity;
+    uint32_t *data;    
+};
+
+#define DATA_STACK_INIT {0, 0, NULL}
+#define DATA_STACK_INIT_CAP 256
+
+static int data_push(struct data_stack *st, uint32_t v) {
+    assert(st != NULL);
+
+    if(st->count + 1 > st->capacity) {
+        size_t new_capacity = MAX(st->capacity * 2, DATA_STACK_INIT_CAP);
+        uint32_t *new = realloc(st->data, new_capacity * sizeof(uint32_t));
+        if(!new)
+            return errno;
+
+        st->data = new;
+        st->capacity = new_capacity;
+    }
+
+    st->data[st->count++] = v;
+    return 0;
+}
+
+static uint32_t data_pop(struct data_stack *st) {
+    assert(st && st->count > 0);
+
+    return st->data[--st->count];
+}
+
+struct call {
+    struct cc_parser *parser;
+    uint32_t ip;
+    uint32_t sp;
+    uint32_t rp; // result pointer
+    struct cc_location loc;
+};
+
+struct call_stack {
+    size_t capacity;
+    size_t count;
+    struct call *items;
+};
+
+#define CALL_STACK_INIT {0, 0, NULL}
+#define CALL_STACK_INIT_CAP 128
+
+static int call_push(struct call_stack *st, struct call call) {
+    if(st->count + 1 > st->capacity) {
+        size_t new_capacity = MAX(st->capacity * 2, CALL_STACK_INIT_CAP);
+        void *new = realloc(st->items, new_capacity * sizeof(struct call));
+        if(!new)
+            return errno;
+
+        st->items = new;
+        st->capacity = new_capacity;
+    }
+
+    st->items[st->count++] = call;
+    return 0;
+}
+
+static struct call call_pop(struct call_stack *st) {
+    assert(st->count > 0);
+    return st->items[--st->count];
+}
+
+struct result_stack {
+    size_t capacity;
+    size_t count;
+    void **items;
+};
+
+#define RESULT_STACK_INIT {0, 0, NULL}
+#define RESULT_STACK_INIT_CAP 256
+
+static int result_push(struct result_stack *st, void* v) {
+    if(st->count + 1 > st->capacity) {
+        size_t new_capacity = MAX(st->capacity * 2, RESULT_STACK_INIT_CAP);
+        void *new = realloc(st->items, new_capacity * sizeof(void*));
+        if(!new)
+            return errno;
+
+        st->items = new;
+        st->capacity = new_capacity;
+    }
+
+    st->items[st->count++] = v;
+    return 0;
+}
+
+static void *result_pop(struct result_stack *st) {
+    assert(st->count > 0);
+    return st->items[--st->count];
+}
+
+/* static void dump_results(struct result_stack *st) {
+    if(st->count == 0)
+        fprintf(stderr, "No results.\n");
+
+    for(size_t i = 0; i < st->count; i++) {
+        fprintf(stderr, "  %2zu) %p\n", i, st->items[i]);
+    }
+} */
+
+static int eval(struct cc_state *s, struct cc_parser *p, struct cc_result *r) {
+    struct data_stack data_stack = DATA_STACK_INIT;
+    struct result_stack result_stack = RESULT_STACK_INIT;
+    struct call_stack call_stack = CALL_STACK_INIT;
+
+    int err;
+
+    if((err = call_push(&call_stack, (struct call){
+        .parser = p,
+        .ip = 0,
+        .sp = 0,
+        .rp = 0
+    })))
+        goto cleanup;
+
+    uint32_t call_success = PARSE_SUCCESS;
+
+    while(call_stack.count > 0) {
+        struct call *t = &call_stack.items[call_stack.count - 1];
+        call_success = PARSE_SUCCESS;
+
+        // resolve parser lookups directly
+        while(t->parser->type == PARSER_LOOKUP) {
+            // TODO: filter out infinite recursion
+
+            struct cc_parser *found = scope_lookup(s, t->parser->match.lookup);
+            if(!found) {
+                if((err = new_error(r->err, s, format("undefined parser \"%s\"", t->parser->match.lookup), false)))
+                    goto cleanup;
+                
+                call_success = PARSE_FAILURE;
+                goto do_return;
+            }
+
+            t->parser = found;
+        }
+        
+        // check if the current parser a terminal parser
+        if(!is_combinator(t->parser->type)) {
+            // interpret the parser directly without generating ir first
+            void *call_result = NULL;
+            call_success = call_terminal(s, t->parser, &call_result, r->err);
+            if(err < 0) {
+                err = -call_success;
+                goto cleanup;
+            }
+
+            if(call_success == PARSE_SUCCESS && !(s->flags & CC_STATE_FLAG_NORETURN) && (err = result_push(&result_stack, call_result)))
+                goto cleanup;
+
+            goto do_return;
+        }
+
+        // compile the parser to IR if needed
+        if(!t->parser->ir && (err = cc_compile(t->parser)))
+            goto cleanup;
+
+        assert(t->parser->ir && "no IR present even though it should be");
+
+
+        // automatically return on IR end
+        if(t->ip >= t->parser->ir->count) {
+            call_success = data_pop(&data_stack);
+            goto do_return;
+        }
+
+        uint32_t v;
+
+        // interpret the next IR opcode
+        // fprintf(stderr, "%04x: <%02hhx> %s\n", t->ip, t->parser->ir->bytes[t->ip], ir_str_opcode(t->parser->ir->bytes[t->ip]));
+        switch(t->parser->ir->bytes[t->ip++]) {
+        case IR_PUSH:
+            assert(t->parser->ir->count - t->ip >= sizeof(uint32_t));
+
+            v = ir_read_u32(t->parser->ir, t->ip);
+            t->ip += sizeof(uint32_t);
+
+            if((err = data_push(&data_stack, v)))
+                goto cleanup;
+            continue;
+
+        case IR_POP:
+            data_pop(&data_stack);
+            continue;
+
+        case IR_SWAP:
+            assert(data_stack.count >= 2);
+            v = data_stack.data[data_stack.count - 1];
+            data_stack.data[data_stack.count - 1] = data_stack.data[data_stack.count - 2];
+            data_stack.data[data_stack.count - 2] = v;
+            continue;
+
+        case IR_DUP:
+            assert(data_stack.count >= 1);
+            v = data_stack.data[data_stack.count - 1];
+
+            if((err = data_push(&data_stack, v)))
+                goto cleanup;
+            continue;
+
+        case IR_NEGATE:
+            assert(data_stack.count >= 1);
+            data_stack.data[data_stack.count - 1] = !data_stack.data[data_stack.count - 1];
+            continue;
+
+        case IR_INCREMENT:
+            assert(data_stack.count >= 1);
+            data_stack.data[data_stack.count - 1]++; // TODO: range check
+            continue;
+
+        case IR_DECREMENT:
+            assert(data_stack.count >= 1);
+            data_stack.data[data_stack.count - 1]--; // TODO: range check
+            continue;
+
+        case IR_SAVE_LOCATION:
+            t->loc = s->loc;
+            continue;
+
+        case IR_RESTORE_LOCATION:
+            s->loc = t->loc;
+            continue;
+
+        case IR_SET_NORETURN:
+            assert(data_stack.count >= 1);
+
+            v = data_stack.data[data_stack.count - 1];
+            data_stack.data[data_stack.count - 1] = set_flag(s, CC_STATE_FLAG_NORETURN, v);
+            continue;
+
+        case IR_SET_NOERROR:
+            assert(data_stack.count >= 1);
+
+            v = data_stack.data[data_stack.count - 1];
+            data_stack.data[data_stack.count - 1] = set_flag(s, CC_STATE_FLAG_NOERR, v);
+            continue;
+
+        case IR_CALL:
+            assert(t->parser->ir->count - t->ip >= sizeof(uintptr_t));
+            
+            if((err = call_push(&call_stack, (struct call){
+                .parser = (struct cc_parser*) ir_read_ptr(t->parser->ir, t->ip), // call destination
+                .sp = data_stack.count,     // save stack pointer
+                .rp = result_stack.count,   // save result pointer
+                .ip = 0,                    // initial instruction pointer
+            })))
+                goto cleanup;
+            t->ip += sizeof(uintptr_t);
+            continue;
+
+        case IR_RETURN:
+        do_return:
+            assert(data_stack.count >= t->sp);
+
+            if(s->flags & CC_STATE_FLAG_NORETURN || !call_success) {
+                assert(result_stack.count >= t->rp);
+                result_stack.count = t->rp;
+            }
+            else {
+                assert(result_stack.count == t->rp + 1);
+            }
+
+            data_stack.count = t->sp;   // restore stack pointer
+            call_pop(&call_stack);      // return to caller
+                
+            if((err = data_push(&data_stack, call_success)))
+                goto cleanup;
+            continue;
+
+        case IR_FOLD:
+            uint32_t n = data_pop(&data_stack);
+            if(!(s->flags & CC_STATE_FLAG_NORETURN)) {
+                assert(result_stack.count >= n);
+
+                result_stack.count -= n;
+                void *fold_result = t->parser->fold ?
+                    t->parser->fold(n, result_stack.items + result_stack.count)
+                    : NULL;
+
+                if((err = result_push(&result_stack, fold_result)))
+                    goto cleanup;
+            }
+            continue;
+
+        case IR_APPLY:
+            assert(t->parser->type == PARSER_APPLY);
+            if(!(s->flags & CC_STATE_FLAG_NORETURN)) {
+                assert(result_stack.count > 0);
+
+                void *result_top = result_stack.items[result_stack.count - 1];
+                result_stack.items[result_stack.count - 1] = t->parser->match.apply.af(result_top);
+            }
+            continue;
+
+        case IR_EXPECT:
+            assert(t->parser->type == PARSER_EXPECT);
+            if((err = add_expected(r->err, s, t->parser->match.expect.what)))
+                goto cleanup;
+            continue;
+
+        case IR_PUSH_BINDING:
+            assert(t->parser->type == PARSER_BIND);
+            if((err = scope_push(s, t->parser)))
+                goto cleanup;
+            continue;
+
+        case IR_POP_BINDING:
+            assert(t->parser->type == PARSER_BIND);
+            if(scope_pop(s) != t->parser)
+                assert(false && "scope stack corrupt");
+            continue;
+
+        case IR_NULL_RESULT:
+            if(!(s->flags & CC_STATE_FLAG_NORETURN) && (err = result_push(&result_stack, NULL)))
+                goto cleanup;
+            continue;
+
+        case IR_POP_RESULT:
+            if(!(s->flags & CC_STATE_FLAG_NORETURN))
+                result_pop(&result_stack);
+            continue;
+
+        case IR_JUMP:
+            assert(t->parser->ir->count - t->ip >= sizeof(uint32_t));
+
+            t->ip = ir_read_u32(t->parser->ir, t->ip);
+
+            assert(t->ip != UINT32_MAX && "unpatched jump target");
+            continue;
+
+        case IR_JUMP_IF_NONZERO:
+            assert(t->parser->ir->count - t->ip >= sizeof(uint32_t));
+
+            if(data_pop(&data_stack) != 0)
+                t->ip = ir_read_u32(t->parser->ir, t->ip);
+            else
+                t->ip += sizeof(uint32_t);
+
+            assert(t->ip != UINT32_MAX && "unpatched jump target");
+            continue;
+
+        case IR_JUMP_IF_SUCCESS:
+            assert(t->parser->ir->count - t->ip >= sizeof(uint32_t));
+
+            if(data_pop(&data_stack) != PARSE_FAILURE)
+                t->ip = ir_read_u32(t->parser->ir, t->ip);
+            else
+                t->ip += sizeof(uint32_t);
+
+            assert(t->ip != UINT32_MAX && "unpatched jump target");
+            continue;
+
+        case IR_JUMP_IF_FAILURE:
+            assert(t->parser->ir->count - t->ip >= sizeof(uint32_t));
+
+            if(data_pop(&data_stack) == PARSE_FAILURE)
+                t->ip = ir_read_u32(t->parser->ir, t->ip);
+            else
+                t->ip += sizeof(uint32_t);
+
+            assert(t->ip != UINT32_MAX && "unpatched jump target");
+            continue;
+
+        default:
+            ir_dump(t->parser->ir, stderr);
+            if((err = new_error(r->err, s, format("undefined opcode <%02hhx> at <%04x>", t->parser->ir->bytes[t->ip - 1], t->ip - 1), false)))
+                goto cleanup;
+            call_success = PARSE_FAILURE;
+            goto do_return;
+        }
+    }
+
+    assert(data_stack.count >= 1);
+    call_success = data_pop(&data_stack);
+
+    assert((call_success != PARSE_SUCCESS || result_stack.count <= 1) && "too many items left on result stack");
+    r->out = call_success == PARSE_SUCCESS && result_stack.count ? result_stack.items[0] : NULL;
+cleanup:
+    if(data_stack.data)
+        free(data_stack.data);
+    if(call_stack.items)
+        free(call_stack.items);
+    if(result_stack.items)
+        free(result_stack.items);
+    return err ? -err : call_success;
 }
 
 int cc_parse(const struct cc_source *src, struct cc_parser *p, struct cc_result *r) {
@@ -894,7 +783,7 @@ int cc_parse(const struct cc_source *src, struct cc_parser *p, struct cc_result 
         err = EINVAL;
         goto cleanup;
     }
-    
+
     struct cc_state s = {
         .flags = CC_STATE_FLAGS_DEFAULT,
         .loc = CC_LOCATION_DEFAULT,
@@ -910,17 +799,17 @@ int cc_parse(const struct cc_source *src, struct cc_parser *p, struct cc_result 
     
     memset(r->err, 0, sizeof(struct cc_error));
 
-    int res = run_parser(&s, p, &r->out, r->err);
+    int res = eval(&s, p, r);
 
     if(res < 0) {
-        // libc error, ideally this should never happen
+        // resource error, ideally this should never happen
         free(r->err);
         err = -res;
         goto cleanup;
     }
 
     if(res == PARSE_SUCCESS) {
-        free(r->err);
+        cc_err_free(r->err);
         r->err = NULL;
     }
 
