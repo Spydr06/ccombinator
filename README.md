@@ -105,6 +105,12 @@ Functions that accept a parameter of type `struct cc_parser *` consume a referen
   ```
   After parsing, `r` returns the parsing result as either a value in `r.out` or an error report in `r.err`.
 
+- If you just want to check, if a source is in the language of a parser, and do not care about the return value,
+  `cc_matches` runs the parser `p` on the input string `in` and returns `CC_MATCH_OK`, `CC_MATCH_NOMATCH` or a negative errno value on error:
+  ```c
+  int cc_matches(const char8_t *in, struct cc_parser *p, struct cc_error **e);
+  ```
+
 - Errors can be either printed directly or converted to a formatted error string:
     ```c
     char *cc_err_string(struct cc_error *e);

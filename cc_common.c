@@ -340,3 +340,38 @@ void *cc_apply_free(void *r) {
     return NULL;
 }
 
+int cc_matches(const char8_t *in, struct cc_parser *p, struct cc_error **e) {
+    if(!p || !in)
+        return -EINVAL;
+
+    struct cc_source *s = cc_string_source(in);
+    if(!s)
+        return -errno;
+
+    // disable return values (not needed)
+    if(!(p = cc_noreturn(p)))
+        return -errno;
+
+    // disable error messages, if the error parameter is NULL
+    if(!e && !(p = cc_noerror(p)))
+        return -errno;
+
+    struct cc_result r;
+    int err;
+    
+    if((err = cc_parse(s, p, &r)))
+        return -err;
+
+    cc_close(s);
+
+    if(r.err) {
+        if(e)
+            *e = r.err;
+        else
+            cc_err_free(r.err);
+        return CC_NOMATCH;
+    }
+
+    return CC_MATCH;
+}
+

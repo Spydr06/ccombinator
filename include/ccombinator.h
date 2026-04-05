@@ -365,6 +365,15 @@ void *cc_apply_free(void *r);
 struct cc_parser *cc_regex_from(const struct cc_source *s, struct cc_error **e);
 struct cc_parser *cc_regex(const char8_t *re, struct cc_error **e);
 
+
+enum cc_match_result {
+    CC_NOMATCH  = 0,
+    CC_MATCH    = 1
+};
+
+// Runs parser `p` on the input string `in` and returns `CC_MATCH_OK`, `CC_MATCH_NOMATCH` or a negative errno value on error.
+int cc_matches(const char8_t *in, struct cc_parser *p, struct cc_error **e);
+
 /*
  * Backus-Naur Form (BNF)
  *

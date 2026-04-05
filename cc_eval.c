@@ -240,7 +240,7 @@ static int match_oneof(struct cc_state *s, const char32_t *chars, size_t n, stru
 
     bool one_found = false;
     for(size_t i = 0; i < n; i++) {
-        if(next == chars[n]) {
+        if(next == chars[i]) {
             if(one_found)
                 return PARSE_FAILURE;
             one_found = true;
@@ -264,7 +264,7 @@ static int match_anyof(struct cc_state *s, const char32_t *chars, size_t n, stru
         return PARSE_FAILURE;
 
     for(size_t i = 0; i < n; i++) {
-        if(next == chars[n]) {
+        if(next == chars[i]) {
             advance_char(s, next);
 
             if(!is_noreturn(s) && !(*r = LAZY_UPCAST(lazy_char(next))))
@@ -565,7 +565,7 @@ static int lazy_eval(struct result_stack *result_stack, struct data_stack *data_
             unreachable();
         }
 
-        if((err =lazy_free(result_pop(result_stack), result_stack)))
+        if((err = lazy_free(result_pop(result_stack), result_stack)))
             goto cleanup;
     }
 
