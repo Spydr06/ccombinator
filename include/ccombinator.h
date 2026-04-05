@@ -129,11 +129,11 @@ void cc_err_free(struct cc_error *e);
  */
 
 // increments the reference-count of the parser `p` and returns it
-struct cc_parser *cc_release(struct cc_parser *p);
+struct cc_parser *cc_retain(struct cc_parser *p);
 
 // decrements the reference-count of the parser `p` and returns it.
 // if the reference-count reaches `0`, `p` is automatically freed and NULL returned.
-struct cc_parser *cc_retain(struct cc_parser *p);
+struct cc_parser *cc_release(struct cc_parser *p);
 
 // copies the contents of parser `s` to `d` while preserving the individual reference-counts.
 void cc_parser_copy(struct cc_parser *d, const struct cc_parser* s);
@@ -402,10 +402,6 @@ struct cc_source *cc_open(const char *filename);
 
 // frees a `cc_source` and closes all associated IO objects
 int cc_close(struct cc_source *s);
-
-// sets the maximum recursion depth for parsers running on `s`.
-// if `max` is `0`, recursion depth testing is disabled.
-struct cc_source *cc_max_recursion(struct cc_source *s, unsigned max);
 
 // main parsing function:
 //
