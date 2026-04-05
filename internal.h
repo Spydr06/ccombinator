@@ -23,8 +23,10 @@
 
 #ifdef __GNUC__
     #define __internal __attribute__((visibility("hidden")))
+    #define __packed __attribute__((packed))
 #else
     #define __internal
+    #define __packed
 #endif
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
@@ -32,12 +34,7 @@
 
 #define LEN(a) (sizeof((a)) / sizeof((a)[0]))
 
-#define CC_UTF8_ENCODE_MAX (MB_CUR_MAX + 1)
-#define CC_UTF8_ENCODE_PRINTABLE_MAX MAX(CC_UTF8_ENCODE_MAX, 16)
-
-#define CC_UTF8_IS_CONT(x) (((x) & 0xc0) == 0x80)
-
-#define CC_DEFAULT_MAX_RECURSION 1024
+// Parser structs:
 
 #define PARSE_SUCCESS 1
 #define PARSE_FAILURE 0
@@ -161,7 +158,6 @@ struct cc_source {
     const char *origin;
 
     int fd;
-    unsigned max_recursion;
 
     const char8_t *buffer;
     size_t buffer_size;
@@ -169,35 +165,37 @@ struct cc_source {
     int (*buffer_dtor)(const char8_t *buffer);
 };
 
+// Intermediate-representation structs:
+
 enum cc_ir_opcode : uint8_t {
-    IR_PUSH = 0x01,  // push uint32_t on the stack
-    IR_POP,     // pop 
-    IR_SWAP,    // swap two top stack entries
-    IR_DUP,     // duplicate top stack element
-    IR_NEGATE,  // negate the top stack element
-    IR_INCREMENT, // increment the top stack element
-    IR_DECREMENT, // decrement the top stack element
+    IR_PUSH = 0x01,         // push uint32_t on the stack
+    IR_POP,                 // pop 
+    IR_SWAP,                // swap two top stack entries
+    IR_DUP,                 // duplicate top stack element
+    IR_NEGATE,              // negate the top stack element
+    IR_INCREMENT,           // increment the top stack element
+    IR_DECREMENT,           // decrement the top stack element
 
-    IR_SAVE_LOCATION,
-    IR_RESTORE_LOCATION,
-    IR_SET_NOERROR, // set the noerror flag
-    IR_SET_NORETURN, // set the noretun flag
+    IR_SAVE_LOCATION,       // save the current input location
+    IR_RESTORE_LOCATION,    // restore the input location from a save
+    IR_SET_NOERROR,         // set the noerror flag
+    IR_SET_NORETURN,        // set the noretun flag
 
-    IR_CALL,
-    IR_RETURN,
+    IR_CALL,                // call another parser
+    IR_RETURN,              // return from the current parser
 
-    IR_FOLD,
-    IR_APPLY,
-    IR_EXPECT,
-    IR_PUSH_BINDING,
-    IR_POP_BINDING,
-    IR_NULL_RESULT,
-    IR_POP_RESULT,
+    IR_FOLD,                // call the fold function
+    IR_APPLY,               // call the apply function
+    IR_EXPECT,              // add an "expect XXX" entry to an error
+    IR_PUSH_BINDING,        // push a new binding
+    IR_POP_BINDING,         // pop the topmost binding
+    IR_NULL_RESULT,         // push a NULL (empty) parser result
+    IR_POP_RESULT,          // pop the topmost parser result
 
-    IR_JUMP,
-    IR_JUMP_IF_NONZERO,
-    IR_JUMP_IF_SUCCESS,
-    IR_JUMP_IF_FAILURE,
+    IR_JUMP,                // unconditional jump
+    IR_JUMP_IF_NONZERO,     // jump if the top stack element != 0
+    IR_JUMP_IF_SUCCESS,     // jump if the top stack element == PARSE_SUCCESS
+    IR_JUMP_IF_FAILURE,     // jump if the top stack element == PARSE_FAILURE
 };
 
 #define IR_UNROLL_THRESHOLD 8
@@ -247,6 +245,127 @@ static inline void ir_write_ptr(struct cc_ir *ir, uint32_t ip, uintptr_t p) {
         ir->bytes[ip + i] = (p >> ((sizeof(uintptr_t) - i - 1) * 8)) & 0xff;
     }
 }
+
+// Stack structs used for evaluation
+
+struct call_stack;
+struct data_stack;
+
+struct result_stack {
+    size_t capacity;
+    size_t count;
+    struct cc_lazy **items;
+};
+
+#define RESULT_STACK_INIT {0, 0, NULL}
+#define RESULT_STACK_INIT_CAP 256
+
+__internal int result_push(struct result_stack *st, struct cc_lazy* v);
+__internal struct cc_lazy *result_pop(struct result_stack *st);
+__internal struct cc_lazy *result_top(struct result_stack *st);
+
+// Lazy-evaluation structs:
+
+enum cc_lazy_type : uint8_t {
+    LAZY_VALUE = 0x01,
+    LAZY_INLINE,
+    LAZY_CHAR,
+    LAZY_TERMINAL,
+    LAZY_LIFT,
+    LAZY_FOLD,
+    LAZY_APPLY,
+};
+
+struct cc_lazy {
+    enum cc_lazy_type type;
+};
+
+#define LAZY_UPCAST(l) (&(l)->lazy)
+#define LAZY_DOWNCAST(l, as) ((as *)(void*)(l))
+
+struct cc_lazy_value {
+    struct cc_lazy lazy;
+
+    void *value;
+};
+
+static_assert(offsetof(struct cc_lazy_value, lazy) == 0);
+
+struct cc_lazy_inline {
+    struct cc_lazy lazy;
+
+    uint32_t size;
+    uint8_t value[];
+} __packed;
+
+static_assert(offsetof(struct cc_lazy_inline, lazy) == 0);
+
+struct cc_lazy_char {
+    struct cc_lazy lazy;
+
+    char32_t ch;
+} __packed;
+
+static_assert(offsetof(struct cc_lazy_char, lazy) == 0);
+
+struct cc_lazy_terminal {
+    struct cc_lazy lazy;
+
+    struct cc_parser *p;
+};
+
+static_assert(offsetof(struct cc_lazy_terminal, lazy) == 0);
+
+struct cc_lazy_lift {
+    struct cc_lazy lazy;
+
+    cc_lift_t lift;
+};
+
+static_assert(offsetof(struct cc_lazy_lift, lazy) == 0);
+
+struct cc_lazy_fold {
+    struct cc_lazy lazy;
+
+    unsigned n;
+    cc_fold_t fold;
+    struct cc_lazy* values[];
+};
+
+static_assert(offsetof(struct cc_lazy_fold, lazy) == 0);
+
+struct cc_lazy_apply {
+    struct cc_lazy lazy;
+
+    cc_apply_t apply;
+    struct cc_lazy *value;
+};
+
+static_assert(offsetof(struct cc_lazy_apply, lazy) == 0);
+
+static inline bool lazy_is_recursive(struct cc_lazy* lazy) {
+    return lazy != NULL && (lazy->type == LAZY_APPLY || lazy->type == LAZY_FOLD);
+}
+
+__internal struct cc_lazy_value *lazy_value(void *value);
+__internal struct cc_lazy_inline *lazy_inline(void *value, size_t size);
+__internal struct cc_lazy_char *lazy_char(char32_t ch);
+__internal struct cc_lazy_terminal *lazy_terminal(struct cc_parser *p);
+__internal struct cc_lazy_lift *lazy_lift(cc_lift_t lift);
+__internal struct cc_lazy_fold *lazy_fold(cc_fold_t fold, unsigned n, struct cc_lazy *values[]);
+__internal struct cc_lazy_apply *lazy_apply(cc_apply_t apply, struct cc_lazy *value);
+
+// freeing done on a stack since lazy-trees might be very big
+__internal int lazy_free(struct cc_lazy *lazy, struct result_stack *stack);
+
+__internal void lazy_debug_dump(const struct cc_lazy *lazy, FILE *f);
+
+// UTF-8 utilities:
+
+#define CC_UTF8_ENCODE_MAX (MB_CUR_MAX + 1)
+#define CC_UTF8_ENCODE_PRINTABLE_MAX MAX(CC_UTF8_ENCODE_MAX, 16)
+
+#define CC_UTF8_IS_CONT(x) (((x) & 0xc0) == 0x80)
 
 static inline char32_t utf8_first_cp(const uint8_t *s) {
     uint32_t k = s[0] ? __builtin_clz(~(s[0] << 24)) : 0;

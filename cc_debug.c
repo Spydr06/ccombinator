@@ -259,3 +259,50 @@ __internal int ir_dump(const struct cc_ir *ir, FILE *f) {
     return 0;
 }
 
+__internal void lazy_debug_dump(const struct cc_lazy *lazy, FILE *f) {
+    if(!lazy) {
+        fprintf(f, "<null>");
+        return;
+    }
+
+    char8_t ch_buf[CC_UTF8_ENCODE_PRINTABLE_MAX];
+
+    switch(lazy->type) {
+    case LAZY_VALUE:
+        fprintf(f, "<%p>", LAZY_DOWNCAST(lazy, struct cc_lazy_value)->value);
+        break;
+    case LAZY_INLINE:
+        fprintf(f, "<%p>", LAZY_DOWNCAST(lazy, struct cc_lazy_inline)->value);
+        break;
+    case LAZY_CHAR:
+        utf8_encode_printable(LAZY_DOWNCAST(lazy, struct cc_lazy_char)->ch, ch_buf);
+        fprintf(f, "%s", ch_buf);
+        break;
+    case LAZY_TERMINAL:
+        fprintf(f, "terminal(%s, %p)", ch_buf, (void*) LAZY_DOWNCAST(lazy, struct cc_lazy_terminal)->p);
+        break;
+    case LAZY_LIFT:
+        fprintf(f, "lift(%p)", (void*) LAZY_DOWNCAST(lazy, struct cc_lazy_lift)->lift);
+        break;
+    case LAZY_FOLD:
+        struct cc_lazy_fold *fold = LAZY_DOWNCAST(lazy, struct cc_lazy_fold);
+        fprintf(f, "fold[%p](", (void*) fold->fold);
+
+        for(unsigned i = 0; i < fold->n; i++) {
+            lazy_debug_dump(fold->values[i], f);
+
+            fprintf(f, "%s", i + 1 == fold->n ? ")" : ", ");
+        }
+        break;
+    case LAZY_APPLY:
+        struct cc_lazy_apply *apply = LAZY_DOWNCAST(lazy, struct cc_lazy_apply);
+
+        fprintf(f, "apply[%p](", (void*) apply->apply);
+        lazy_debug_dump(apply->value, f);
+        fprintf(f, ")");
+        break;
+    default:
+        fprintf(f, "<unknown>");
+    }
+}
+

@@ -210,9 +210,7 @@ static struct cc_source *new_source(void) {
     if(!s)
         return NULL;
 
-    s->max_recursion = CC_DEFAULT_MAX_RECURSION;
     s->fd = -1;
-
     return s;
 }
 

@@ -4,6 +4,11 @@
 #include <stdlib.h>
 #include <locale.h>
 
+static void *my_apply(void *v) {
+    printf("APPLY\n");
+    return v;
+}
+
 int main() {
     setlocale(LC_ALL, "");
 

@@ -12,8 +12,13 @@
 
 #define CC_STATE_FLAGS_DEFAULT  0x00
 #define CC_STATE_FLAG_EOF       0x01
-#define CC_STATE_FLAG_NOERR     0x02
+#define CC_STATE_FLAG_NOERROR   0x02
 #define CC_STATE_FLAG_NORETURN  0x04
+
+#define FAIL_WITH(e, s, x, c) do {                  \
+        int err = new_error((e), (s), (x), (c));    \
+        return err ? -err : PARSE_FAILURE;        \
+    } while(0)
 
 struct cc_state {
     int flags;
@@ -21,35 +26,23 @@ struct cc_state {
     struct cc_location loc;
 
     struct dynarr scope;
-
-    unsigned recursion_depth;
-    unsigned max_recursion_depth;
 };
 
-struct cc_save {
-    int flags;
-    struct cc_location loc;
+static inline bool is_sof(struct cc_state *s) {
+    return s->loc.byte_off == 0;
+}
 
-    size_t scope_len;
-    unsigned recursion_depth;
-};
+static inline bool is_eof(struct cc_state *s) {
+    return !!(s->flags & CC_STATE_FLAG_EOF);
+}
 
-#define PROP(s, x) do {                             \
-/*        assert((s)->recursion_depth > 0);           \
-        (s)->recursion_depth--;            */         \
-        return (x);                                 \
-    } while(0)
+static inline bool is_noreturn(struct cc_state *s) {
+    return !!(s->flags & CC_STATE_FLAG_NORETURN);
+}
 
-#define FAIL_WITH(e, s, x, c) do {                  \
-        int err = new_error((e), (s), (x), (c));    \
-        PROP(s, err ? -err : PARSE_FAILURE);        \
-    } while(0)
-
-#define SUCCESS(r, s, x) do {                       \
-        if(!((s)->flags & CC_STATE_FLAG_NORETURN))  \
-            (r) = (x);                              \
-        PROP(s, PARSE_SUCCESS);                     \
-    } while(0)
+static inline bool is_noerror(struct cc_state *s) {
+    return !!(s->flags & CC_STATE_FLAG_NOERROR);
+}
 
 static inline bool set_flag(struct cc_state *s, int flag, bool state) {
     bool before = !!(s->flags & flag);
@@ -100,7 +93,7 @@ static struct cc_parser *scope_lookup(struct cc_state *s, const char *name) {
 }
 
 static int new_error(struct cc_error *e, struct cc_state *s, const char *msg, bool copy) {
-    if(s->flags & CC_STATE_FLAG_NOERR)
+    if(is_noerror(s))
         return 0;
 
     if(!e)
@@ -119,7 +112,7 @@ static int new_error(struct cc_error *e, struct cc_state *s, const char *msg, bo
 }
 
 static int add_expected(struct cc_error *e, struct cc_state *s, const char *expected) {
-    if(s->flags & CC_STATE_FLAG_NOERR || e->num_expected >= CC_ERR_MAX_EXPECTED)
+    if(is_noerror(s) || e->num_expected >= CC_ERR_MAX_EXPECTED)
         return 0; // cannot add anymore, don't error tho
 
     if(e->num_expected == 0) {
@@ -158,10 +151,7 @@ static int allocate_string(char8_t **s, size_t n) {
     return 0;
 }
 
-static int char_result(struct cc_state *s, char8_t **r, char32_t ch) {
-    if(s->flags & CC_STATE_FLAG_NORETURN)
-        return 0;
-
+static int char_result(char8_t **r, char32_t ch) {
     int err = allocate_string(r, utf8_cp_length(ch));
     if(err)
         return err;
@@ -170,10 +160,7 @@ static int char_result(struct cc_state *s, char8_t **r, char32_t ch) {
     return 0;
 }
 
-static int string_result(struct cc_state *s, char8_t **r, const char8_t *str) {
-    if(s->flags & CC_STATE_FLAG_NORETURN)
-        return 0;
-
+static int string_result(char8_t **r, const char8_t *str) {
     size_t len = strlen((const char*) str);
     int err = allocate_string(r, len);
     if(err)
@@ -183,76 +170,72 @@ static int string_result(struct cc_state *s, char8_t **r, const char8_t *str) {
     return 0;
 }
 
-static int match_char(struct cc_state *s, char32_t ch, void **r) {
+static int match_char(struct cc_state *s, char32_t ch, struct cc_lazy **r) {
     char32_t next = peek_at(s);
-    if((s->flags & CC_STATE_FLAG_EOF) || next != ch)
+    if(is_eof(s) || next != ch)
         return PARSE_FAILURE;
 
     advance_char(s, ch);
 
-    int err;
-    if(r != NULL && (err = char_result(s, (char8_t**) r, ch)))
-        return err;
+    if(r != NULL && !(*r = LAZY_UPCAST(lazy_char(next))))
+        return -ENOMEM;
 
     return PARSE_SUCCESS;
 }
 
-static int match_char_func(struct cc_state *s, int(*f)(char32_t), void **r) {
+static int match_char_func(struct cc_state *s, int(*f)(char32_t), struct cc_lazy **r) {
     char32_t next = peek_at(s);
-    if((s->flags & CC_STATE_FLAG_EOF) || !f(next))
+    if(is_eof(s) || !f(next))
         return PARSE_FAILURE;
 
     advance_char(s, next);
 
-    int err;
-    if(r != NULL && (err = char_result(s, (char8_t**) r, next)))
-        return err;
+    if(!is_noreturn(s) && !(*r = LAZY_UPCAST(lazy_char(next))))
+        return -ENOMEM;
     
     return PARSE_SUCCESS;
 }
 
-static int match_eof(struct cc_state *s, void **r) {
+static int match_eof(struct cc_state *s, struct cc_lazy **r) {
     *r = NULL;
     peek_at(s);
-    return (s->flags & CC_STATE_FLAG_EOF) ? PARSE_SUCCESS : PARSE_FAILURE;
+    return is_eof(s) ? PARSE_SUCCESS : PARSE_FAILURE;
 }
 
-static int match_sof(struct cc_state *s, void **r) {
+static int match_sof(struct cc_state *s, struct cc_lazy **r) {
     *r = NULL;
-    return s->loc.byte_off == 0 ? PARSE_SUCCESS : PARSE_FAILURE;
+    return is_sof(s) ? PARSE_SUCCESS : PARSE_FAILURE;
 }
 
-static int match_any(struct cc_state *s, void **r) {
+static int match_any(struct cc_state *s, struct cc_lazy **r) {
     char32_t next = peek_at(s);
-    if(s->flags & CC_STATE_FLAG_EOF)
+    if(is_eof(s))
         return PARSE_FAILURE;
 
     advance_char(s, next);
 
-    int err;
-    if((err = char_result(s, (char8_t**) r, next)))
-        return err;
+    if(!is_noreturn(s) && !(*r = LAZY_UPCAST(lazy_char(next))))
+        return -ENOMEM;
 
     return PARSE_SUCCESS;
 }
 
-static int match_range(struct cc_state *s, char32_t lo, char32_t hi, void **r) {
+static int match_range(struct cc_state *s, char32_t lo, char32_t hi, struct cc_lazy **r) {
     char32_t next = peek_at(s);
-    if((s->flags & CC_STATE_FLAG_EOF) || next < lo || next > hi)
+    if(is_eof(s) || next < lo || next > hi)
         return PARSE_FAILURE;
 
     advance_char(s, next);
 
-    int err;
-    if((err = char_result(s, (char8_t**) r, next)))
-        return err;
+    if(!is_noreturn(s) && !(*r = LAZY_UPCAST(lazy_char(next))))
+        return -ENOMEM;
 
     return PARSE_SUCCESS;
 }
 
-static int match_oneof(struct cc_state *s, const char32_t *chars, size_t n, void **r) {
+static int match_oneof(struct cc_state *s, const char32_t *chars, size_t n, struct cc_lazy **r) {
     char32_t next = peek_at(s);
-    if(s->flags & CC_STATE_FLAG_EOF)
+    if(is_eof(s))
         return PARSE_FAILURE;
 
     bool one_found = false;
@@ -269,25 +252,23 @@ static int match_oneof(struct cc_state *s, const char32_t *chars, size_t n, void
 
     advance_char(s, next);
 
-    int err;
-    if((err = char_result(s, (char8_t**) r, next)))
-        return err;
+    if(!is_noreturn(s) && !(*r = LAZY_UPCAST(lazy_char(next))))
+        return -ENOMEM;
 
     return PARSE_SUCCESS;
 }
 
-static int match_anyof(struct cc_state *s, const char32_t *chars, size_t n, void **r) {
+static int match_anyof(struct cc_state *s, const char32_t *chars, size_t n, struct cc_lazy **r) {
     char32_t next = peek_at(s);
-    if(s->flags & CC_STATE_FLAG_EOF)
+    if(is_eof(s))
         return PARSE_FAILURE;
 
     for(size_t i = 0; i < n; i++) {
         if(next == chars[n]) {
             advance_char(s, next);
 
-            int err;
-            if((err = char_result(s, (char8_t**) r, next)))
-                return err;
+            if(!is_noreturn(s) && !(*r = LAZY_UPCAST(lazy_char(next))))
+                return -ENOMEM;
 
             return PARSE_SUCCESS;
         }
@@ -296,9 +277,9 @@ static int match_anyof(struct cc_state *s, const char32_t *chars, size_t n, void
     return PARSE_FAILURE;
 }
 
-static int match_noneof(struct cc_state *s, const char32_t *chars, size_t n, void **r) {
+static int match_noneof(struct cc_state *s, const char32_t *chars, size_t n, struct cc_lazy **r) {
     char32_t next = peek_at(s);
-    if(s->flags & CC_STATE_FLAG_EOF)
+    if(is_eof(s))
         return PARSE_FAILURE;
 
     for(size_t i = 0; i < n; i++) {
@@ -308,18 +289,17 @@ static int match_noneof(struct cc_state *s, const char32_t *chars, size_t n, voi
 
     advance_char(s, next);
 
-    int err;
-    if((err = char_result(s, (char8_t**) r, next)))
-        return err;
+    if(!is_noreturn(s) && !(*r = LAZY_UPCAST(lazy_char(next))))
+        return -ENOMEM;
 
     return PARSE_SUCCESS;
 }
 
-static int match_string(struct cc_state *s, const char8_t *str, void **r) {
+static int match_string(struct cc_state *s, struct cc_parser *p, struct cc_lazy **r) {
     struct cc_state save = *s;
 
-    for(size_t i = 0; str[i];) {
-        char32_t ch = utf8_first_cp(str + i);
+    for(size_t i = 0; p->match.str[i];) {
+        char32_t ch = utf8_first_cp(p->match.str + i);
         if(!match_char(s, ch, NULL)) {
             *s = save;
             return PARSE_FAILURE;
@@ -328,54 +308,66 @@ static int match_string(struct cc_state *s, const char8_t *str, void **r) {
         i += utf8_cp_length(ch);
     }
 
-    int err;
-    if((err = string_result(s, (char8_t**) r, str)))
-        return err;
+    if(!is_noreturn(s) && !(*r = LAZY_UPCAST(lazy_terminal(p))))
+        return -ENOMEM;
 
     return PARSE_SUCCESS;
 }
 
-static int call_terminal(struct cc_state *s, const struct cc_parser *p, void **r, struct cc_error *e) {
+static int call_terminal(struct cc_state *s, struct cc_parser *p, struct cc_lazy **r, struct cc_error *e) {
     if(!s || !p)
         return EINVAL;
 
-    if(!(s->flags & CC_STATE_FLAG_NORETURN)) {
+    if(!is_noreturn(s)) {
         if(!r)
             return EINVAL;
         *r = NULL;
     }
 
     switch(p->type) {
-        case PARSER_FAIL:       FAIL_WITH(e, s, (char*) p->match.msg, true);
+        case PARSER_FAIL:
+            FAIL_WITH(e, s, (char*) p->match.msg, true);
 
-        case PARSER_PASS:       SUCCESS(r, s, NULL);
+        case PARSER_PASS:
+            return PARSE_SUCCESS;
         
-        case PARSER_LOCATION: {
-            struct cc_location *loc = malloc(sizeof(struct cc_location));
-            if(!loc)
-                PROP(s, -errno);
+        case PARSER_LOCATION:
+            if(!is_noreturn(s) && !((*r) = LAZY_UPCAST(lazy_inline(&s->loc, sizeof(struct cc_location)))))
+                return -ENOMEM;
+            return PARSE_SUCCESS;
 
-            memcpy(loc, &s->loc, sizeof(struct cc_location));
-            SUCCESS(r, s, (void*) loc);
-        }
+        case PARSER_LIFT:
+            if(!is_noreturn(s) && !((*r) = LAZY_UPCAST(lazy_lift(p->match.lift.lf))))
+                return -ENOMEM;
+            return PARSE_SUCCESS;
 
-        case PARSER_LIFT:       SUCCESS(r, s, p->match.lift.lf());
-        case PARSER_LIFT_VAL:   SUCCESS(r, s, p->match.lift.val);
+        case PARSER_LIFT_VAL:
+            if(!is_noreturn(s) && !((*r) = LAZY_UPCAST(lazy_value(p->match.lift.val))))
+                return -ENOMEM;
+            return PARSE_SUCCESS;
 
-        case PARSER_EOF:        PROP(s, match_eof(s, r));
-        case PARSER_SOF:        PROP(s, match_sof(s, r));
-        case PARSER_ANY:        PROP(s, match_any(s, r));
-        case PARSER_CHAR:       PROP(s, match_char(s, p->match.ch, r));
-        case PARSER_CHAR_RANGE: PROP(s, match_range(s, p->match.lo, p->match.hi, r));
-        case PARSER_MATCH:      PROP(s, match_char_func(s, p->match.matchfn, r));
+        case PARSER_EOF:
+            return match_eof(s, r);
+        case PARSER_SOF:
+            return match_sof(s, r);
+        case PARSER_ANY:
+            return match_any(s, r);
+        case PARSER_CHAR:
+            return match_char(s, p->match.ch, r);
+        case PARSER_CHAR_RANGE:
+            return match_range(s, p->match.lo, p->match.hi, r);
+        case PARSER_MATCH:
+            return match_char_func(s, p->match.matchfn, r);
+        case PARSER_ONEOF:
+            return match_oneof(s, p->match.list.chars, p->match.list.n, r);
+        case PARSER_ANYOF:
+            return match_anyof(s, p->match.list.chars, p->match.list.n, r);
+        case PARSER_NONEOF:
+            return match_noneof(s, p->match.list.chars, p->match.list.n, r);
+        case PARSER_STRING:
+            return match_string(s, p, r);
 
-        case PARSER_ONEOF:      PROP(s, match_oneof(s, p->match.list.chars, p->match.list.n, r));
-        case PARSER_ANYOF:      PROP(s, match_anyof(s, p->match.list.chars, p->match.list.n, r));
-        case PARSER_NONEOF:     PROP(s, match_noneof(s, p->match.list.chars, p->match.list.n, r));
-
-        case PARSER_STRING:     PROP(s, match_string(s, p->match.str, r));
-
-        default:                FAIL_WITH(e, s, format("undefined parser %d", p->type), false);
+        default: FAIL_WITH(e, s, format("undefined parser %d", p->type), false);
     }
 }
 
@@ -448,16 +440,8 @@ static struct call call_pop(struct call_stack *st) {
     return st->items[--st->count];
 }
 
-struct result_stack {
-    size_t capacity;
-    size_t count;
-    void **items;
-};
 
-#define RESULT_STACK_INIT {0, 0, NULL}
-#define RESULT_STACK_INIT_CAP 256
-
-static int result_push(struct result_stack *st, void* v) {
+__internal int result_push(struct result_stack *st, struct cc_lazy* v) {
     if(st->count + 1 > st->capacity) {
         size_t new_capacity = MAX(st->capacity * 2, RESULT_STACK_INIT_CAP);
         void *new = realloc(st->items, new_capacity * sizeof(void*));
@@ -472,21 +456,125 @@ static int result_push(struct result_stack *st, void* v) {
     return 0;
 }
 
-static void *result_pop(struct result_stack *st) {
+__internal struct cc_lazy *result_pop(struct result_stack *st) {
     assert(st->count > 0);
     return st->items[--st->count];
 }
 
-/* static void dump_results(struct result_stack *st) {
-    if(st->count == 0)
-        fprintf(stderr, "No results.\n");
+__internal struct cc_lazy *result_top(struct result_stack *st) {
+    assert(st->count > 0);
+    return st->items[st->count - 1];
+}
 
-    for(size_t i = 0; i < st->count; i++) {
-        fprintf(stderr, "  %2zu) %p\n", i, st->items[i]);
+static int lazy_eval(struct result_stack *result_stack, struct data_stack *data_stack, void **result) {
+    assert(result_stack->count == 1 && "no result left on stack");
+    data_stack->count = 0;
+
+    int err = 0;
+
+    if(lazy_is_recursive(result_top(result_stack)) && (err = data_push(data_stack, 0u)))
+        goto cleanup;
+
+    while(result_stack->count > 0) {
+        struct cc_lazy *lazy = result_top(result_stack); 
+
+        if(!lazy) {
+            *result = NULL;
+            result_pop(result_stack);
+            continue;
+        }
+
+        switch(lazy->type) {
+        case LAZY_VALUE:
+            *result = LAZY_DOWNCAST(lazy, struct cc_lazy_value)->value;
+            break;
+        case LAZY_INLINE:
+            struct cc_lazy_inline *inl = LAZY_DOWNCAST(lazy, struct cc_lazy_inline);
+            if(!(*result = malloc(inl->size)))
+                return errno;
+            
+            memcpy(*result, inl->value, inl->size);
+            break;
+        case LAZY_CHAR:
+            char_result((char8_t**) result, LAZY_DOWNCAST(lazy, struct cc_lazy_char)->ch); 
+            break;
+        case LAZY_TERMINAL:
+            struct cc_lazy_terminal *term = LAZY_DOWNCAST(lazy, struct cc_lazy_terminal);
+            switch(term->p->type) {
+                case PARSER_STRING:
+                    string_result((char8_t**) result, term->p->match.str);
+                    break;
+                default:
+                    assert(false && "unexpected parser type");
+                    unreachable();
+            }
+            break;
+        case LAZY_LIFT:
+            *result = LAZY_DOWNCAST(lazy, struct cc_lazy_lift)->lift();
+            break;
+        case LAZY_FOLD: {
+            struct cc_lazy_fold *fold = LAZY_DOWNCAST(lazy, struct cc_lazy_fold);
+            uint32_t state = data_pop(data_stack);
+
+            if(state > 0) {
+                // save the previous result
+                fold->values[state - 1] = *result;
+            }
+
+            if(state < fold->n) {
+                // calculate the next result
+                if((err = data_push(data_stack, state + 1u)))
+                    goto cleanup;
+                if((err = result_push(result_stack, fold->values[state])))
+                    goto cleanup;
+                if(lazy_is_recursive(fold->values[state]) && (err = data_push(data_stack, 0u)))
+                    goto cleanup;  
+                continue;
+            }
+
+            *result = fold->fold(fold->n, (void**) fold->values); 
+
+            memset(fold->values, 0, fold->n * sizeof(struct cc_fold*));
+            break;
+        }
+        case LAZY_APPLY: {
+            struct cc_lazy_apply *apply = LAZY_DOWNCAST(lazy, struct cc_lazy_apply);
+            uint32_t state = data_pop(data_stack);
+
+            switch(state) {
+            case 0:
+                if((err = data_push(data_stack, 1u)))
+                    goto cleanup;
+                if((err = result_push(result_stack, apply->value)))
+                    goto cleanup;
+                if(lazy_is_recursive(apply->value) && (err = data_push(data_stack, 0u)))
+                    goto cleanup;
+                continue;
+            case 1:
+                *result = apply->apply(*result); 
+                apply->value = NULL;
+                break;
+            default:
+                assert(false && "invalid apply state");
+                unreachable();
+            }
+            break;
+        }
+        default:
+            assert(false && "invalid lazy type");
+            unreachable();
+        }
+
+        if((err =lazy_free(result_pop(result_stack), result_stack)))
+            goto cleanup;
     }
-} */
 
-static int eval(struct cc_state *s, struct cc_parser *p, struct cc_result *r) {
+    assert(data_stack->count == 0 && "data stack is not empty");
+cleanup:
+    return err;
+}
+
+static int ir_eval(struct cc_state *s, struct cc_parser *p, struct cc_result *r) {
     struct data_stack data_stack = DATA_STACK_INIT;
     struct result_stack result_stack = RESULT_STACK_INIT;
     struct call_stack call_stack = CALL_STACK_INIT;
@@ -513,7 +601,7 @@ static int eval(struct cc_state *s, struct cc_parser *p, struct cc_result *r) {
 
             struct cc_parser *found = scope_lookup(s, t->parser->match.lookup);
             if(!found) {
-                if((err = new_error(r->err, s, format("undefined parser \"%s\"", t->parser->match.lookup), false)))
+                if(!is_noerror(s) && (err = new_error(r->err, s, format("undefined parser \"%s\"", t->parser->match.lookup), false)))
                     goto cleanup;
                 
                 call_success = PARSE_FAILURE;
@@ -526,14 +614,14 @@ static int eval(struct cc_state *s, struct cc_parser *p, struct cc_result *r) {
         // check if the current parser a terminal parser
         if(!is_combinator(t->parser->type)) {
             // interpret the parser directly without generating ir first
-            void *call_result = NULL;
+            struct cc_lazy *call_result;
             call_success = call_terminal(s, t->parser, &call_result, r->err);
             if(err < 0) {
                 err = -call_success;
                 goto cleanup;
             }
 
-            if(call_success == PARSE_SUCCESS && !(s->flags & CC_STATE_FLAG_NORETURN) && (err = result_push(&result_stack, call_result)))
+            if(call_success == PARSE_SUCCESS && !is_noreturn(s) && (err = result_push(&result_stack, call_result)))
                 goto cleanup;
 
             goto do_return;
@@ -620,7 +708,7 @@ static int eval(struct cc_state *s, struct cc_parser *p, struct cc_result *r) {
             assert(data_stack.count >= 1);
 
             v = data_stack.data[data_stack.count - 1];
-            data_stack.data[data_stack.count - 1] = set_flag(s, CC_STATE_FLAG_NOERR, v);
+            data_stack.data[data_stack.count - 1] = set_flag(s, CC_STATE_FLAG_NOERROR, v);
             continue;
 
         case IR_CALL:
@@ -640,9 +728,14 @@ static int eval(struct cc_state *s, struct cc_parser *p, struct cc_result *r) {
         do_return:
             assert(data_stack.count >= t->sp);
 
-            if(s->flags & CC_STATE_FLAG_NORETURN || !call_success) {
-                assert(result_stack.count >= t->rp);
-                result_stack.count = t->rp;
+            if(is_noreturn(s) || !call_success) {
+                while(result_stack.count > t->rp) {
+                    struct cc_lazy *lazy = result_pop(&result_stack);
+                    if((err = lazy_free(lazy, &result_stack)))
+                        goto cleanup;
+                }
+
+                assert(result_stack.count == t->rp);
             }
             else {
                 assert(result_stack.count == t->rp + 1);
@@ -657,27 +750,38 @@ static int eval(struct cc_state *s, struct cc_parser *p, struct cc_result *r) {
 
         case IR_FOLD:
             uint32_t n = data_pop(&data_stack);
-            if(!(s->flags & CC_STATE_FLAG_NORETURN)) {
-                assert(result_stack.count >= n);
+            if(is_noreturn(s))
+                continue;
 
-                result_stack.count -= n;
-                void *fold_result = t->parser->fold ?
-                    t->parser->fold(n, result_stack.items + result_stack.count)
-                    : NULL;
+            assert(result_stack.count >= n);
+            result_stack.count -= n;
 
-                if((err = result_push(&result_stack, fold_result)))
-                    goto cleanup;
+            struct cc_lazy_fold *fold = lazy_fold(t->parser->fold, n, result_stack.items + result_stack.count);
+            if(!fold) {
+                err = ENOMEM;
+                goto cleanup;
+                
             }
+
+            if((err = result_push(&result_stack, LAZY_UPCAST(fold))))
+                goto cleanup;
             continue;
 
         case IR_APPLY:
             assert(t->parser->type == PARSER_APPLY);
-            if(!(s->flags & CC_STATE_FLAG_NORETURN)) {
-                assert(result_stack.count > 0);
+            if(is_noreturn(s))
+                continue;
 
-                void *result_top = result_stack.items[result_stack.count - 1];
-                result_stack.items[result_stack.count - 1] = t->parser->match.apply.af(result_top);
+            assert(result_stack.count > 0);
+
+            struct cc_lazy *result_top = result_stack.items[result_stack.count - 1];
+            struct cc_lazy_apply *apply = lazy_apply(t->parser->match.apply.af, result_top);
+            if(!apply) {
+                err = ENOMEM;
+                goto cleanup;
             }
+        
+            result_stack.items[result_stack.count - 1] = LAZY_UPCAST(apply);
             continue;
 
         case IR_EXPECT:
@@ -699,13 +803,16 @@ static int eval(struct cc_state *s, struct cc_parser *p, struct cc_result *r) {
             continue;
 
         case IR_NULL_RESULT:
-            if(!(s->flags & CC_STATE_FLAG_NORETURN) && (err = result_push(&result_stack, NULL)))
+            if(!is_noreturn(s) && (err = result_push(&result_stack, NULL)))
                 goto cleanup;
             continue;
 
         case IR_POP_RESULT:
-            if(!(s->flags & CC_STATE_FLAG_NORETURN))
-                result_pop(&result_stack);
+            if(!is_noreturn(s)) {
+                struct cc_lazy *lazy = result_pop(&result_stack);
+                if((err = lazy_free(lazy, &result_stack)))
+                    goto cleanup;
+            }
             continue;
 
         case IR_JUMP:
@@ -751,7 +858,7 @@ static int eval(struct cc_state *s, struct cc_parser *p, struct cc_result *r) {
 
         default:
             ir_dump(t->parser->ir, stderr);
-            if((err = new_error(r->err, s, format("undefined opcode <%02hhx> at <%04x>", t->parser->ir->bytes[t->ip - 1], t->ip - 1), false)))
+            if(!is_noerror(s) && (err = new_error(r->err, s, format("undefined opcode <%02hhx> at <%04x>", t->parser->ir->bytes[t->ip - 1], t->ip - 1), false)))
                 goto cleanup;
             call_success = PARSE_FAILURE;
             goto do_return;
@@ -761,15 +868,21 @@ static int eval(struct cc_state *s, struct cc_parser *p, struct cc_result *r) {
     assert(data_stack.count >= 1);
     call_success = data_pop(&data_stack);
 
-    assert((call_success != PARSE_SUCCESS || result_stack.count <= 1) && "too many items left on result stack");
-    r->out = call_success == PARSE_SUCCESS && result_stack.count ? result_stack.items[0] : NULL;
+    if(call_success == PARSE_SUCCESS && !is_noreturn(s)) {
+        err = lazy_eval(&result_stack, &data_stack, &r->out);
+    }
 cleanup:
+    while(result_stack.count > 0) {
+        struct cc_lazy *lazy = result_pop(&result_stack);
+        if(lazy_free(lazy, &result_stack))
+            break;
+    }
+    if(result_stack.items)
+        free(result_stack.items);
     if(data_stack.data)
         free(data_stack.data);
     if(call_stack.items)
         free(call_stack.items);
-    if(result_stack.items)
-        free(result_stack.items);
     return err ? -err : call_success;
 }
 
@@ -789,7 +902,6 @@ int cc_parse(const struct cc_source *src, struct cc_parser *p, struct cc_result 
         .loc = CC_LOCATION_DEFAULT,
         .src = src,
         .scope = DYNARR_INIT,
-        .max_recursion_depth = src->max_recursion
     };
     
     if(!(r->err = malloc(sizeof(struct cc_error)))) {
@@ -798,8 +910,9 @@ int cc_parse(const struct cc_source *src, struct cc_parser *p, struct cc_result 
     }
     
     memset(r->err, 0, sizeof(struct cc_error));
+    r->out = NULL;
 
-    int res = eval(&s, p, r);
+    int res = ir_eval(&s, p, r);
 
     if(res < 0) {
         // resource error, ideally this should never happen
