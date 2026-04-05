@@ -1,0 +1,11 @@
+prefix=@PREFIX@
+exec_prefix=${prefix}
+includedir=@INCLUDEDIR@
+libdir=@LIBDIR@
+
+Name: ccombinator
+Description: A simple parser combinator library for C.
+Version: @VERSION@
+Cflags: -I${includedir}
+Libs: -L${libdir} -lccombinator
+

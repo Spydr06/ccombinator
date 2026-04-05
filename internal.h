@@ -16,8 +16,9 @@
 
 #define QUOTE(a) #a
 
-#define CC_VERISON_MAJOR 0
-#define CC_VERSION_MINOR 1
+#if !defined(CC_VERSION_MINOR) || !defined(CC_VERSION_MAJOR)
+    #error "No version information available."
+#endif
 
 #define CC_VERSION_STRING (QUOTE(CC_VERSION_MAJOR) "." QUOTE(CC_VERSION_MINOR))
 

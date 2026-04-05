@@ -17,7 +17,7 @@ int cc_version_minor(void) {
 }
 
 int cc_version_major(void) {
-    return CC_VERISON_MAJOR;
+    return CC_VERSION_MAJOR;
 }
 
 const char *cc_version(void) {
