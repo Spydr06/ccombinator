@@ -580,6 +580,7 @@ static int ir_eval(struct cc_state *s, struct cc_parser *p, struct cc_result *r)
     struct call_stack call_stack = CALL_STACK_INIT;
 
     int err;
+    uint32_t call_success = PARSE_SUCCESS;
 
     if((err = call_push(&call_stack, (struct call){
         .parser = p,
@@ -588,8 +589,6 @@ static int ir_eval(struct cc_state *s, struct cc_parser *p, struct cc_result *r)
         .rp = 0
     })))
         goto cleanup;
-
-    uint32_t call_success = PARSE_SUCCESS;
 
     while(call_stack.count > 0) {
         struct call *t = &call_stack.items[call_stack.count - 1];
@@ -883,7 +882,7 @@ cleanup:
         free(data_stack.data);
     if(call_stack.items)
         free(call_stack.items);
-    return err ? -err : call_success;
+    return err ? -err : (int) call_success;
 }
 
 int cc_parse(const struct cc_source *src, struct cc_parser *p, struct cc_result *r) {

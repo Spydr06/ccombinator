@@ -1,12 +1,12 @@
 /*
-    ccombinator.h - A simple parser combinator library for C.
+    ccombinator - A simple parser combinator library for C.
 
     See https://github.com/Spydr06/ccombinator for the source code and more information.
     The following license applies:
 
     The MIT License (MIT)
 
-    Copyright (c) 2025 Spydr06
+    Copyright (c) 2025-2026 Spydr06
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"), to deal

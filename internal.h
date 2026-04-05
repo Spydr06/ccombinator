@@ -26,7 +26,6 @@
     #define __packed __attribute__((packed))
 #else
     #define __internal
-    #define __packed
 #endif
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
@@ -296,7 +295,7 @@ struct cc_lazy_inline {
 
     uint32_t size;
     uint8_t value[];
-} __packed;
+};
 
 static_assert(offsetof(struct cc_lazy_inline, lazy) == 0);
 
@@ -304,7 +303,7 @@ struct cc_lazy_char {
     struct cc_lazy lazy;
 
     char32_t ch;
-} __packed;
+};
 
 static_assert(offsetof(struct cc_lazy_char, lazy) == 0);
 

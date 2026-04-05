@@ -282,11 +282,11 @@ __internal void lazy_debug_dump(const struct cc_lazy *lazy, FILE *f) {
         fprintf(f, "terminal(%s, %p)", ch_buf, (void*) LAZY_DOWNCAST(lazy, struct cc_lazy_terminal)->p);
         break;
     case LAZY_LIFT:
-        fprintf(f, "lift(%p)", (void*) LAZY_DOWNCAST(lazy, struct cc_lazy_lift)->lift);
+        fprintf(f, "lift(%p)", (void*) (uintptr_t) LAZY_DOWNCAST(lazy, struct cc_lazy_lift)->lift);
         break;
     case LAZY_FOLD:
         struct cc_lazy_fold *fold = LAZY_DOWNCAST(lazy, struct cc_lazy_fold);
-        fprintf(f, "fold[%p](", (void*) fold->fold);
+        fprintf(f, "fold[%p](", (void*) (uintptr_t) fold->fold);
 
         for(unsigned i = 0; i < fold->n; i++) {
             lazy_debug_dump(fold->values[i], f);
@@ -297,7 +297,7 @@ __internal void lazy_debug_dump(const struct cc_lazy *lazy, FILE *f) {
     case LAZY_APPLY:
         struct cc_lazy_apply *apply = LAZY_DOWNCAST(lazy, struct cc_lazy_apply);
 
-        fprintf(f, "apply[%p](", (void*) apply->apply);
+        fprintf(f, "apply[%p](", (void*) (uintptr_t) apply->apply);
         lazy_debug_dump(apply->value, f);
         fprintf(f, ")");
         break;
