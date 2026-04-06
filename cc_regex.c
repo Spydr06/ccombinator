@@ -11,6 +11,9 @@ static struct cc_parser *__re_parser;
 #define RE_SEL_END ']'
 #define RE_GROUP_START '('
 #define RE_GROUP_END ')'
+#define RE_RANGE_START '{'
+#define RE_RANGE_END '}'
+#define RE_RANGE_SEP ','
 
 #define RE_NEGATE_CHAR '^'
 #define RE_CLASS_CHAR ':'
@@ -27,7 +30,7 @@ static struct cc_parser *__re_parser;
 #define RE_ESCAPE_CHAR '\\'
 #define RE_SPECIAL_CHARS U"\\()[]{}|?*+.^$"
 
-#define RE_SEL_ALLOWED_CHARS U"(){}|?*.^$"
+#define RE_SEL_ALLOWED_CHARS U"[(){}|?*.^$"
 
 #define RE_CLASS_CHARS U"adDlsSuwWx"
 
@@ -38,6 +41,10 @@ static void *re_char(void *r) {
     free(r);
 
     return cc_char(ch);
+}
+
+static void *re_sel_end_char(void *) {
+    return cc_char(RE_SEL_END);
 }
 
 static int re_not_digit(char32_t c) {
@@ -79,7 +86,10 @@ static const struct {
 static void *re_posix_class(void *r) {
     if(!r) return NULL; // error propagation
     
-    return cc_match((int (*)(char32_t)) r);
+    intptr_t i = (intptr_t) r;
+    assert(i >= 0 && i < RE_POSIX_CLASSES_COUNT && "out-of-range posix class");
+    
+    return cc_match(re_posix_classes[i].match);
 }
 
 static void *re_class(void *r) {
@@ -115,10 +125,10 @@ static void *re_class(void *r) {
     }
 }
 
-static void *re_range(size_t n, void **r) {
+static void *re_sel_range(size_t n, void **r) {
     if(!r) return NULL; // error propagation
 
-    assert(n == 3 && "re_range() only applicable on cc_and(3, ...)");
+    assert(n == 3 && "re_sel_range() only applicable on cc_and(3, ...)");
 
     if(!r[0] || !r[2]) {
         free(r[0]);
@@ -235,7 +245,7 @@ static void *re_quantify(size_t n, void **r) {
 }
 
 static void *re_alt(size_t n, void **r) {
-    if(!r) return NULL;
+    if(!r) return NULL; // error propagation
     if(n == 1) return r[0];
 
     assert(n % 2 == 1 && "re_alt() cannot be applied to even n");
@@ -254,15 +264,19 @@ static void *re_alt(size_t n, void **r) {
 }
 
 static struct cc_parser *re_expr_fix(struct cc_parser *self, void*) {
+    // escaped special characters \[ \(, ...
     struct cc_parser *escaped = cc_apply(cc_seq(cc_fold_last, cc_noreturn(cc_char(RE_ESCAPE_CHAR)), cc_anyof(RE_SPECIAL_CHARS)), re_char);
+
+    // character classes \d, \s, \W, ...
     struct cc_parser *class = cc_apply(cc_seq(cc_fold_last, cc_noreturn(cc_char(RE_ESCAPE_CHAR)), cc_anyof(RE_CLASS_CHARS)), re_class);
 
+    // posix character classes [:alnum:], [:blank:], ...
     struct cc_parser **posix_classes = malloc(RE_POSIX_CLASSES_COUNT * sizeof(struct cc_parser*));
     if(!posix_classes)
         return NULL;
 
     for(int i = 0; i < RE_POSIX_CLASSES_COUNT; i++) {
-        posix_classes[i] = cc_apply(cc_seq(cc_fold_last, cc_noreturn(cc_string(re_posix_classes[i].class)), cc_lift_val((void*) re_posix_classes[i].match)), re_posix_class);
+        posix_classes[i] = cc_apply(cc_seq(cc_fold_last, cc_noreturn(cc_string(re_posix_classes[i].class)), cc_lift_val((void*) (intptr_t) i)), re_posix_class);
     }
 
     struct cc_parser *posix_class = cc_and(5,
@@ -274,6 +288,7 @@ static struct cc_parser *re_expr_fix(struct cc_parser *self, void*) {
         cc_noreturn(cc_char(RE_SEL_END))
     );
 
+    // basic symbol (character, start or end of input)
     struct cc_parser *sym = cc_or(7,
         cc_apply(cc_noneof(RE_SPECIAL_CHARS), re_char),
         escaped,
@@ -284,29 +299,38 @@ static struct cc_parser *re_expr_fix(struct cc_parser *self, void*) {
         cc_apply(cc_noreturn(cc_char(RE_ANY_CHAR)), re_any)
     );
 
-    struct cc_parser *range = cc_and(3,
-        re_range,
+    // range of characters (A-Z, ...)
+    struct cc_parser *sel_range = cc_and(3,
+        re_sel_range,
         cc_noneof(RE_SPECIAL_CHARS),
         cc_noreturn(cc_char(RE_RANGE_CHAR)),
         cc_noneof(RE_SPECIAL_CHARS)
     );
 
+    // option of a selection
     struct cc_parser *opt = cc_or(3,
-        range,
+        sel_range,
         cc_retain(sym),
         cc_anyof(RE_SEL_ALLOWED_CHARS)
     );
 
+    struct cc_parser *first_opt = cc_either(
+        cc_retain(opt),
+        cc_apply(cc_noreturn(cc_char(RE_SEL_END)), re_sel_end_char)
+    );
+
+    // selections ([a-zA-Z0-9_], [^a-z], ...)
     struct cc_parser *sel = cc_and(3,
         cc_fold_middle,
         cc_noreturn(cc_char(RE_SEL_START)),
         cc_either(
-            cc_seq(cc_fold_last, cc_noreturn(cc_char(RE_NEGATE_CHAR)), cc_least(1, re_negated_sel, cc_retain(opt))),
-            cc_least(1, re_sel, opt)
+            cc_seq(cc_fold_last, cc_noreturn(cc_char(RE_NEGATE_CHAR)), cc_postfix(re_negated_sel, cc_retain(first_opt), cc_retain(opt))),
+            cc_postfix(re_sel, first_opt, opt)
         ),
         cc_noreturn(cc_char(RE_SEL_END))
     );
 
+    // grouping (...)
     struct cc_parser *group = cc_and(3,
         cc_fold_middle,
         cc_noreturn(cc_char(RE_GROUP_START)),
@@ -314,18 +338,23 @@ static struct cc_parser *re_expr_fix(struct cc_parser *self, void*) {
         cc_noreturn(cc_char(RE_GROUP_END))
     );
 
+    // singular expression 
     struct cc_parser *exp = cc_or(3, sym, group, sel);
 
+    // qunatifier operators *,+,?
     struct cc_parser* qops = cc_or(3,
         cc_apply(cc_noreturn(cc_char(RE_QUANT_MANY)), re_apply_qop_many),
         cc_apply(cc_noreturn(cc_char(RE_QUANT_LEAST1)), re_apply_qop_least1),
         cc_apply(cc_noreturn(cc_char(RE_QUANT_OPT)), re_apply_qop_opt)
     );
 
+    // quantified expression
     struct cc_parser *quantified = cc_postfix(re_quantify, exp, qops);
 
+    // sequence of expressions
     struct cc_parser *seq = cc_many(re_seq, quantified);
 
+    // alternative expressions (a|b)
     struct cc_parser *alt = cc_chain(
         re_alt,
         seq,

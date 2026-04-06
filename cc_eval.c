@@ -177,7 +177,7 @@ static int match_char(struct cc_state *s, char32_t ch, struct cc_lazy **r) {
 
     advance_char(s, ch);
 
-    if(r != NULL && !(*r = LAZY_UPCAST(lazy_char(next))))
+    if(r != NULL && !is_noreturn(s) && !(*r = LAZY_UPCAST(lazy_char(next))))
         return -ENOMEM;
 
     return PARSE_SUCCESS;
