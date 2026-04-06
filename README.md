@@ -410,6 +410,19 @@ struct cc_parser *cc_regex_from(const struct cc_source *s, struct cc_error **e);
 struct cc_parser *cc_regex(const char8_t *re, struct cc_error **e);
 ```
 
+Supported regular expressions are:
+
+- any symbol `.`
+- end-of-file (EOF) symbol `$`
+- start-of-file (SOF) symbol `^`
+- character classes `\a`, `\d`, `\D`, `\l`, `\s`, `\S`, `\u`, `\w`, `\W`, `\x`
+- posix-like character classes `[:alpha:]`, `[:digit:]`, ...
+- character selections `[a-zA-z0-9_]`
+- negated character selections `[^a-zA-Z]`
+- groupings `(...)` 
+- quantifiers `*`, `+`, `?`
+- alternations `a|b|c`
+
 #### Backus-Naur Form (BNF)
 The following functions aid constructing a grammar by supplying a grammar in an extended backus-naur form:
 ```c
