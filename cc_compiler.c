@@ -146,6 +146,7 @@ static int generate_many(struct cc_ir **ir, cc_fold_t f, struct cc_parser *inner
     if(!f) {
         EMIT(ir, IR_SET_NORETURN);
         EMIT(ir, IR_POP);
+        EMIT(ir, IR_NULL_RESULT);
     }
 
     EMIT_PUSH(ir, PARSE_SUCCESS);
@@ -196,6 +197,7 @@ static int generate_many_until(struct cc_ir **ir, cc_fold_t f, struct cc_parser 
         EMIT(ir, IR_SWAP);
         EMIT(ir, IR_SET_NORETURN);
         EMIT(ir, IR_POP);
+        EMIT(ir, IR_NULL_RESULT);
     }
 cleanup:
     return err;
@@ -279,6 +281,7 @@ static int generate_count(struct cc_ir **ir, cc_fold_t f, struct cc_parser *inne
         EMIT(ir, IR_SWAP);
         EMIT(ir, IR_SET_NORETURN);
         EMIT(ir, IR_POP);
+        EMIT(ir, IR_NULL_RESULT);
     }
 cleanup:
     return err;
@@ -320,6 +323,7 @@ static int generate_least(struct cc_ir **ir, cc_fold_t f, struct cc_parser *inne
         EMIT(ir, IR_SWAP);
         EMIT(ir, IR_SET_NORETURN);
         EMIT(ir, IR_POP);
+        EMIT(ir, IR_NULL_RESULT);
     }
 cleanup:
     return err;
@@ -400,6 +404,7 @@ static int generate_chain(struct cc_ir **ir, cc_fold_t f, struct cc_parser *lr, 
         EMIT(ir, IR_SWAP);
         EMIT(ir, IR_SET_NORETURN);
         EMIT(ir, IR_POP);
+        EMIT(ir, IR_NULL_RESULT);
     }
 cleanup:
     return err;
@@ -432,6 +437,7 @@ static int generate_postfix(struct cc_ir **ir, cc_fold_t f, struct cc_parser *lh
         EMIT(ir, IR_SWAP);
         EMIT(ir, IR_SET_NORETURN);
         EMIT(ir, IR_POP);
+        EMIT(ir, IR_NULL_RESULT);
     }
 
 cleanup:
@@ -468,6 +474,7 @@ static int generate_sequenced(struct cc_ir **ir, cc_fold_t f, struct cc_parser *
         EMIT(ir, IR_SWAP);
         EMIT(ir, IR_SET_NORETURN);
         EMIT(ir, IR_POP);
+        EMIT(ir, IR_NULL_RESULT);
     }
 
 cleanup:
