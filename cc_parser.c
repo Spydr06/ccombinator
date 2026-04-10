@@ -64,6 +64,7 @@ void parser_free(struct cc_parser* p) {
                 cc_release(p->match.variadic.inner[i]);
             break;
         case PARSER_BIND:
+            cc_release(p->match.bind.binding->p);
             cc_release(p->match.bind.inner);
             break;
         case PARSER_SEQ:
@@ -108,13 +109,15 @@ free_data:
             free((char*) p->match.lookup);
             break;
         case PARSER_BIND:
-            free((char*) p->match.bind.name);
+            free((char*) p->match.bind.binding->name);
             break;
         default:
             break;
     }
     
 free_self:
+    if(p->type == PARSER_BIND)
+        free(p->match.bind.binding);
     if(p->ir)
         free(p->ir);
     free(p);
@@ -482,21 +485,31 @@ struct cc_parser *cc_lookup(const char *name) {
     return p;
 }
 
-struct cc_parser *cc_bind(const char *name, struct cc_parser *a) {
-    if(!name || !a) {
+struct cc_parser *cc_bind(const char *name, struct cc_parser *a, struct cc_parser *inner) {
+    struct cc_parser *p = NULL;
+
+    if(!name || !a || !inner) {
         errno = EINVAL;
-        return NULL;
+        goto cleanup;
     }
 
-    struct cc_parser *p = parser_allocate();
-    if(!p)
-        return NULL;
+    if(!(p = parser_allocate()))
+        goto cleanup;
+
+    if(!(p->match.bind.binding = malloc(sizeof(struct cc_binding))))
+        goto cleanup;
 
     p->type = PARSER_BIND;
-    p->match.bind.name = name;
-    p->match.bind.inner = a;
+    p->match.bind.inner = inner;
+    p->match.bind.binding->name = name;
+    p->match.bind.binding->p = a;
 
     return p;
+cleanup:
+    cc_release(p);
+    cc_release(a);
+    cc_release(inner);
+    return NULL;
 }
 
 struct cc_parser *cc_free_data(struct cc_parser *p) {

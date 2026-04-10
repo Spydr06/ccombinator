@@ -87,6 +87,11 @@ static inline bool is_combinator(enum parser_type p) {
     return (p >= PARSER_EXPECT && p <= PARSER_POSTFIX) || (p >= PARSER_NORETURN && p <= PARSER_BIND && p != PARSER_LOOKUP);
 }
 
+struct cc_binding {
+    const char *name;
+    struct cc_parser *p;
+};
+
 enum parser_flags : uint16_t {
     PARSER_FLAG_FREE_DATA = 0x01,
     PARSER_FLAG_RETAIN_INNER = 0x02
@@ -103,7 +108,7 @@ struct cc_parser {
 
     union {
         char32_t ch;
-        struct { char32_t lo, hi; };
+        struct { char32_t lo, hi; }; // range
 
         const char8_t *str;
         const char *msg;
@@ -113,7 +118,7 @@ struct cc_parser {
         const char *lookup;
 
         struct {
-            const char *name;
+            struct cc_binding *binding;
             struct cc_parser *inner;
         } bind;
 
@@ -560,9 +565,38 @@ static inline char *format(const char *fmt, ...) {
     return s;
 }
 
+struct cc_hashentry {
+    const char *key;
+    void *value;
+};
+
+struct cc_hashtable {
+    size_t capacity;
+    size_t size;
+    struct cc_hashentry *entries;
+};
+
+#define FNV_OFFSET 14695981039346656037ul
+#define FNV_PRIME  1099511628211ul
+
+// https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function
+static inline size_t fnv_1a(const char* key) {
+    size_t hash = FNV_OFFSET;
+    for (const char* p = key; *p; p++) {
+        hash ^= (size_t)(*p);
+        hash *= FNV_PRIME;
+    }
+    return hash;
+}
+
+__internal int hashtable_init(struct cc_hashtable *t, size_t cap);
+__internal void hashtable_free(struct cc_hashtable *t);
+
+__internal int hashtable_set(struct cc_hashtable *t, const char *k, void *v);
+__internal void *hashtable_get(struct cc_hashtable *t, const char *k);
+
 struct cc_grammar {
-    size_t n;
-    struct cc_parser *ps[];
+    struct cc_hashtable parsers;
 };
 
 #endif /* CC_INTERNAL_H */

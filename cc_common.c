@@ -375,3 +375,88 @@ int cc_matches(const char8_t *in, struct cc_parser *p, struct cc_error **e) {
     return CC_MATCH;
 }
 
+__internal int hashtable_init(struct cc_hashtable *t, size_t cap) {
+    if(!t || !cap)
+        return EINVAL;
+
+    memset(t, 0, sizeof(struct cc_hashtable));
+    t->capacity = cap;
+
+    if(!(t->entries = calloc(cap, sizeof(struct cc_hashentry))))
+        return errno;
+
+    return 0;
+}
+
+__internal void hashtable_free(struct cc_hashtable *t) {
+    if(!t)
+        return;
+
+    free(t->entries);
+}
+
+static int hashtable_insert(struct cc_hashtable *t, const char *k, void *v) {
+    size_t i = fnv_1a(k) % t->capacity;
+    // linear probing
+    while(t->entries[i].key) {
+        if(strcmp(t->entries[i].key, k) == 0)
+            return EEXIST;
+        i = (i + 1) % t->capacity;
+    }
+
+    t->entries[i].key = k;
+    t->entries[i].value = v;
+}
+
+static int hashtable_expand(struct cc_hashtable *t) {
+    struct cc_hashentry *new_entries = calloc(t->capacity * 2, sizeof(struct cc_hashentry));
+    if(!new_entries)
+        return errno;
+
+    struct cc_hashentry *old_entries = t->entries;
+    size_t old_cap = t->capacity;
+
+    t->capacity = t->capacity * 2;
+    t->entries = new_entries;
+
+    for(size_t i = 0; i < old_cap; i++) {
+        if(old_entries[i].key)
+            hashtable_insert(t, old_entries[i].key, old_entries[i].value);
+    }
+
+    free(old_entries);
+    return 0;
+}
+
+__internal int hashtable_set(struct cc_hashtable *t, const char *k, void *v) {
+    if(!t || !k)
+        return EINVAL;
+
+    int err;
+
+    if(t->size > t->capacity / 2 && (err = hashtable_expand(t)))
+        return err;
+
+    if((err = hashtable_insert(t, k, v)))
+        return err;
+
+    t->size++;
+    return 0;
+}
+
+__internal void *hashtable_get(struct cc_hashtable *t, const char *k) {
+    if(!t || !k) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    // linear probing
+    for(size_t i = fnv_1a(k) % t->capacity; t->entries[i].key; i = (i + 1) % t->capacity) {
+        if(strcmp(t->entries[i].key, k) == 0)
+            return t->entries[i].value;
+    }
+
+    errno = ENOENT;
+    return NULL;
+}
+

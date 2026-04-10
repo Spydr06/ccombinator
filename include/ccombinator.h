@@ -234,8 +234,8 @@ struct cc_parser *cc_location(void);
 // fails if `name` is not a known binding.
 struct cc_parser *cc_lookup(const char *name);
 
-// defines a binding `name` to the parser `a`.
-struct cc_parser *cc_bind(const char *name, struct cc_parser *a);
+// defines a binding `name` to the parser `a` and executes parser `p` in this context.
+struct cc_parser *cc_bind(const char *name, struct cc_parser *a, struct cc_parser *p);
 
 /*
  * Parser Combinators
@@ -381,8 +381,33 @@ int cc_matches(const char8_t *in, struct cc_parser *p, struct cc_error **e);
  * in an Extended Backus-Naur form.
  */
 
-struct cc_grammar *cc_bnf_from(const struct cc_source *s, struct cc_error **e);
-struct cc_grammar *cc_bnf(const char8_t *s, struct cc_error **e);
+enum cc_action_type {
+    CC_ACTION_NULL = 0,
+
+    CC_ACTION_VALUE,
+    CC_ACTION_FOLD,
+    CC_ACTION_APPLY,
+    CC_ACTION_LIFT,
+};
+
+struct cc_action {
+    enum cc_action_type type;
+    const char *name;
+
+    union {
+        cc_fold_t fold;
+        cc_apply_t apply;
+        cc_lift_t lift;
+        void *value;
+    };
+};
+
+#define CC_NULL_ACTION() ((struct cc_action){CC_ACTION_NULL, NULL, {NULL}})
+
+#define CC_ACTIONS(...) ((struct cc_action[]){ __VA_ARGS__ __VA_OPT__(,) CC_NULL_ACTION() })
+
+struct cc_grammar *cc_bnf_from(const struct cc_source *s, const struct cc_action actions[], struct cc_error **e);
+struct cc_grammar *cc_bnf(const char8_t *s, const struct cc_action actions[], struct cc_error **e);
 
 /*
  * Grammar

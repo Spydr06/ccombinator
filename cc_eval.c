@@ -68,12 +68,11 @@ static inline void state_free(struct cc_state *s) {
     free(s->scope.elems);
 }
 
-static inline int scope_push(struct cc_state *s, struct cc_parser *p) {
-    assert(p->type == PARSER_BIND);
-    return dynarr_append(&s->scope, (void*) p);
+static inline int scope_push(struct cc_state *s, struct cc_binding *b) {
+    return dynarr_append(&s->scope, (void*) b);
 }
 
-static inline struct cc_parser *scope_pop(struct cc_state *s) {
+static inline struct cc_binding *scope_pop(struct cc_state *s) {
     assert(s->scope.len > 0);
 
     return s->scope.elems[--s->scope.len];
@@ -83,10 +82,10 @@ static struct cc_parser *scope_lookup(struct cc_state *s, const char *name) {
     // TODO: maybe use some sort of hashing to avoid strcmp?
 
     for(size_t i = s->scope.len; i > 0; i--) {
-        const struct cc_parser *def = s->scope.elems[i - 1];
+        const struct cc_binding *bind = s->scope.elems[i - 1];
 
-        if(strcmp(def->match.bind.name, name) == 0)
-            return def->match.bind.inner;
+        if(strcmp(bind->name, name) == 0)
+            return bind->p;
     }
 
     return NULL;
@@ -791,7 +790,7 @@ static int ir_eval(struct cc_state *s, struct cc_parser *p, struct cc_result *r)
 
         case IR_PUSH_BINDING:
             assert(t->parser->type == PARSER_BIND);
-            if((err = scope_push(s, t->parser)))
+            if((err = scope_push(s, t->parser->match.bind.binding)))
                 goto cleanup;
             continue;
 

@@ -272,9 +272,9 @@ If an error occurrs, `NULL` is returned and `errno` set accordingly.
     struct cc_parser *cc_lookup(const char *name);
     ```
 
-- Defines a binding `name` to the parser `a`:
+- Defines a binding `name` to the parser `a` and executes parser `p` in this context:
     ```c
-    struct cc_parser *cc_bind(const char *name, struct cc_parser *a);
+    struct cc_parser *cc_bind(const char *name, struct cc_parser *a, struct cc_parser *p);
     ```
 
 ### Parser Combinators
