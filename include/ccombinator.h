@@ -59,10 +59,9 @@ typedef struct cc_source cc_source_t;
 
 // callback function types
 
-typedef void *(*cc_lift_t)(void);
-typedef void *(*cc_fold_t)(size_t, void**);
-typedef void *(*cc_apply_t)(void*);
-typedef void (*cc_dtor_t)(void*);
+typedef struct cc_result (*cc_lift_t)(void);
+typedef struct cc_result (*cc_fold_t)(size_t, void**);
+typedef struct cc_result (*cc_apply_t)(void*);
 
 typedef struct cc_parser *(*cc_fix_t)(struct cc_parser*, void*);
 
@@ -96,6 +95,19 @@ struct cc_error {
     char32_t received;
 };
 
+struct cc_error *cc_error(const char *failure);
+CC_format_printf(1)
+struct cc_error *cc_errorf(const char *fmt, ...);
+
+struct cc_error *cc_add_expected(struct cc_error *e, const char *exp);
+CC_format_printf(2)
+struct cc_error *cc_add_expectedf(struct cc_error *e, const char *fmt, ...);
+
+struct cc_error *cc_with_filename(struct cc_error *e, const char *filename);
+struct cc_error *cc_with_location(struct cc_error *e, struct cc_location loc);
+
+struct cc_error *cc_with_received(struct cc_error *e, char32_t received);
+
 // represents the result of a cc_parse() call.
 // on a parsing error, `err` will point to a `cc_error` struct, which must be freed using `cc_err_free`.
 // on success, the top-most parser's return value will be put into `out`.
@@ -103,6 +115,14 @@ struct cc_result {
     struct cc_error *err;
     void *out;
 };
+
+static inline struct cc_result cc_ok(void *out) {
+    return (struct cc_result){.err = NULL, .out = out};
+}
+
+static inline struct cc_result cc_err(struct cc_error *err) {
+    return (struct cc_result){.err = err, .out = NULL};
+}
 
 // converts an error report (`struct cc_error`) into a printable error message.
 // the resulting string must be freed.
@@ -339,22 +359,22 @@ struct cc_parser *cc_free_data(struct cc_parser *p);
 
 // expects all elements of `r` to be utf8-strings.
 // contats all elements to a single string while freeing the input strings.
-void *cc_fold_concat(size_t n, void **r);
+struct cc_result cc_fold_concat(size_t n, void **r);
 
 // retuns the first element of `r` while freeing all remaining elements.
-void *cc_fold_first(size_t n, void **r);
+struct cc_result cc_fold_first(size_t n, void **r);
 
 // returns the middle element of `r` while freeing all remaining elements.
-void *cc_fold_middle(size_t n, void **r);
+struct cc_result cc_fold_middle(size_t n, void **r);
 
 // returns the last element of `r` while freeing all remaining elements.
-void *cc_fold_last(size_t n, void **r);
+struct cc_result cc_fold_last(size_t n, void **r);
 
 // frees all elements of `r` and returns NULL.
-void *cc_fold_null(size_t n, void **r);
+struct cc_result cc_fold_null(size_t n, void **r);
 
 // frees `r` and returns NULL. 
-void *cc_apply_free(void *r);
+struct cc_result cc_apply_free(void *r);
 
 /*
  * Regular Expressions

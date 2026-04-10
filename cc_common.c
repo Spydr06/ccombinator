@@ -108,6 +108,109 @@ void cc_err_free(struct cc_error *e) {
     free(e);
 }
 
+struct cc_error *cc_error(const char *failure) {
+    struct cc_error *e = calloc(1, sizeof(struct cc_error));
+    if(!e)
+        return NULL;
+
+    if(failure && !(e->failure = strdup(failure))) {
+        free(e);
+        return NULL;
+    }
+
+    return e;
+}
+
+CC_format_printf(1)
+struct cc_error *cc_errorf(const char *fmt, ...) {
+    struct cc_error *e = calloc(1, sizeof(struct cc_error));
+    if(!e)
+        return NULL;
+
+    va_list ap;
+    va_start(ap, fmt);
+
+    if(fmt && !(e->failure = vformat(fmt, ap))) {
+        free(e);
+        va_end(ap);
+        return NULL;
+    }
+
+    va_end(ap);
+    return e;
+}
+
+struct cc_error *cc_add_expected(struct cc_error *e, const char *expected) {
+    if(!e)
+        return NULL;
+
+    if(e->num_expected >= CC_ERR_MAX_EXPECTED) {
+        errno = ENOMEM;
+        return NULL; // cannot add anymore
+    }
+
+    /*if(e->num_expected == 0) {
+        e->filename = s->src->origin;
+        e->loc = s->loc;
+        e->received = peek_at(s);
+    }*/
+
+    char *expected_copy = strdup(expected);
+    if(!expected_copy)
+        return NULL;
+
+    e->expected[e->num_expected++] = expected_copy;
+    return e;
+}
+
+CC_format_printf(2)
+struct cc_error *cc_add_expectedf(struct cc_error *e, const char *fmt, ...) {
+    if(!e)
+        return NULL;
+
+    if(e->num_expected >= CC_ERR_MAX_EXPECTED) {
+        errno = ENOMEM;
+        return NULL; // cannot add anymore
+    }
+    
+    va_list ap;
+    va_start(ap, fmt);
+
+    char *expected = vformat(fmt, ap);
+    if(!expected) {
+        va_end(ap);
+        return NULL;
+    }
+
+    e->expected[e->num_expected++] = expected;
+    va_end(ap);
+    return e;
+}
+
+struct cc_error *cc_with_filename(struct cc_error *e, const char *filename) {
+    if(!e)
+        return NULL;
+
+    e->filename = filename;
+    return e;
+}
+
+struct cc_error *cc_with_location(struct cc_error *e, struct cc_location loc) {
+    if(!e)
+        return NULL;
+
+    e->loc = loc;
+    return e;
+}
+
+struct cc_error *cc_with_received(struct cc_error *e, char32_t received) {
+    if(!e)
+        return NULL;
+
+    e->received = received;
+    return e;
+}
+
 int dynarr_append(struct dynarr *da, void *elem) {
     if(!da)
         return EINVAL;
@@ -265,9 +368,9 @@ int cc_close(struct cc_source *s) {
     return 0;
 }
 
-void *cc_fold_concat(size_t n, void **xs) {
+struct cc_result cc_fold_concat(size_t n, void **xs) {
     if(n == 1)
-        return xs[0];
+        return cc_ok(xs[0]);
 
     size_t total = 0;
 
@@ -277,7 +380,7 @@ void *cc_fold_concat(size_t n, void **xs) {
     size_t off = 0;
     char8_t *s = malloc((total + 1) * sizeof(char8_t));
     if(!s)
-        return NULL;
+        return cc_ok(NULL);
 
     for(size_t i = 0; i < n; i++) {
         if(!xs[i])
@@ -291,22 +394,22 @@ void *cc_fold_concat(size_t n, void **xs) {
     }
 
     s[off] = '\0';
-    return s;
+    return cc_ok(s);
 }
 
-void *cc_fold_first(size_t n, void **r) {
+struct cc_result cc_fold_first(size_t n, void **r) {
     if(n == 0)
-        return NULL;
+        return cc_ok(NULL);
 
     for(size_t i = 1; i < n; i++)
         free(r[i]);
     
-    return r[0];
+    return cc_ok(r[0]);
 }
 
-void *cc_fold_middle(size_t n, void **r) {
+struct cc_result cc_fold_middle(size_t n, void **r) {
     if(n == 0)
-        return NULL;
+        return cc_ok(NULL);
 
     size_t m = n / 2;
 
@@ -316,28 +419,28 @@ void *cc_fold_middle(size_t n, void **r) {
         free(r[i]);
     }
 
-    return r[m];
+    return cc_ok(r[m]);
 }
 
-void *cc_fold_last(size_t n, void **r) {
+struct cc_result cc_fold_last(size_t n, void **r) {
     if(n == 0)
-        return NULL;
+        return cc_ok(NULL);
 
     for(size_t i = 0; i < n - 1; i++)
         free(r[i]);
 
-    return r[n - 1];
+    return cc_ok(r[n - 1]);
 }
 
-void *cc_fold_null(size_t n, void **r) {
+struct cc_result cc_fold_null(size_t n, void **r) {
     for(size_t i = 0; i < n; i++)
         free(r[i]);
-    return NULL;
+    return cc_ok(NULL);
 }
 
-void *cc_apply_free(void *r) {
+struct cc_result cc_apply_free(void *r) {
     free(r);
-    return NULL;
+    return cc_ok(NULL);
 }
 
 int cc_matches(const char8_t *in, struct cc_parser *p, struct cc_error **e) {

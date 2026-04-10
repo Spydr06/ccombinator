@@ -34,17 +34,17 @@ static struct cc_parser *__re_parser;
 
 #define RE_CLASS_CHARS U"adDlsSuwWx"
 
-static void *re_char(void *r) {
-    if(!r) return NULL; // error propagation
+static struct cc_result re_char(void *r) {
+    if(!r) return cc_ok(NULL); // error propagation
 
     char32_t ch = utf8_first_cp(r);
     free(r);
 
-    return cc_char(ch);
+    return cc_ok(cc_char(ch));
 }
 
-static void *re_sel_end_char(void *) {
-    return cc_char(RE_SEL_END);
+static struct cc_result re_sel_end_char(void *) {
+    return cc_ok(cc_char(RE_SEL_END));
 }
 
 static int re_not_digit(char32_t c) {
@@ -83,57 +83,57 @@ static const struct {
     { u8"upper", utf8_is_upper }
 };
 
-static void *re_posix_class(void *r) {
-    if(!r) return NULL; // error propagation
+static struct cc_result re_posix_class(void *r) {
+    if(!r) return cc_ok(NULL); // error propagation
     
     intptr_t i = (intptr_t) r;
     assert(i >= 0 && i < RE_POSIX_CLASSES_COUNT && "out-of-range posix class");
     
-    return cc_match(re_posix_classes[i].match);
+    return cc_ok(cc_match(re_posix_classes[i].match));
 }
 
-static void *re_class(void *r) {
-    if(!r) return NULL; // error propagation
+static struct cc_result re_class(void *r) {
+    if(!r) return cc_ok(NULL); // error propagation
 
     char32_t esc = utf8_first_cp(r);
     free(r);
 
     switch(esc) {
         case 'a':
-            return cc_alpha();
+            return cc_ok(cc_alpha());
         case 'd':
-            return cc_digit();
+            return cc_ok(cc_digit());
         case 'D':
-            return parser_match(re_not_digit, "non-digit character");
+            return cc_ok(parser_match(re_not_digit, "non-digit character"));
         case 'l':
-            return cc_lower();
+            return cc_ok(cc_lower());
         case 'u':
-            return cc_upper();
+            return cc_ok(cc_upper());
         case 'w':
-            return parser_match(re_is_word, "character in 'a' - 'z', 'A' - 'Z', '0' - '9' or '_'");
+            return cc_ok(parser_match(re_is_word, "character in 'a' - 'z', 'A' - 'Z', '0' - '9' or '_'"));
         case 'W':
-            return parser_match(re_not_word, "character except 'a' - 'z', 'A' - 'Z', '0' - '9' or '_'");
+            return cc_ok(parser_match(re_not_word, "character except 'a' - 'z', 'A' - 'Z', '0' - '9' or '_'"));
         case 's':
-            return cc_whitespace();
+            return cc_ok(cc_whitespace());
         case 'S':
-            return parser_match(re_not_whitespace, "non-whitespace character");
+            return cc_ok(parser_match(re_not_whitespace, "non-whitespace character"));
         case 'x':
-            return cc_hexdigit();
+            return cc_ok(cc_hexdigit());
         default:
             assert(false && "invalid escape char");
-            return NULL;
+            return cc_ok(NULL);
     }
 }
 
-static void *re_sel_range(size_t n, void **r) {
-    if(!r) return NULL; // error propagation
+static struct cc_result re_sel_range(size_t n, void **r) {
+    if(!r) return cc_ok(NULL); // error propagation
 
     assert(n == 3 && "re_sel_range() only applicable on cc_and(3, ...)");
 
     if(!r[0] || !r[2]) {
         free(r[0]);
         free(r[2]);
-        return NULL;
+        return cc_ok(NULL);
     }
 
     char32_t lo = utf8_first_cp(r[0]);
@@ -141,36 +141,36 @@ static void *re_sel_range(size_t n, void **r) {
 
     free(r[0]); 
     free(r[2]);
-    return cc_range(lo, hi);
+    return cc_ok(cc_range(lo, hi));
 }
 
-static void *re_eof(void *) {
-    return cc_eof();
+static struct cc_result re_eof(void *) {
+    return cc_ok(cc_eof());
 }
 
-static void *re_sof(void *) {
-    return cc_sof();
+static struct cc_result re_sof(void *) {
+    return cc_ok(cc_sof());
 }
 
-static void *re_any(void *) {
-    return cc_any();
+static struct cc_result re_any(void *) {
+    return cc_ok(cc_any());
 }
 
-static void *re_sel(size_t n, void **r) {
-    if(!r) return NULL;
-    if(n == 1) return r[0];
-    if(n == 2) return cc_either(r[0], r[1]);
+static struct cc_result re_sel(size_t n, void **r) {
+    if(!r) return cc_ok(NULL);
+    if(n == 1) return cc_ok(r[0]);
+    if(n == 2) return cc_ok(cc_either(r[0], r[1]));
 
     assert(n > 0 && "zero-size selection");
 
     struct cc_parser **ps = malloc(n * sizeof(struct cc_parser*)); // FIXME: do without copying
     memcpy(ps, r, n * sizeof(struct cc_parser*));
 
-    return cc_free_data(cc_orv((unsigned) n, ps));
+    return cc_ok(cc_free_data(cc_orv((unsigned) n, ps)));
 }
 
-static void *re_negated_sel(size_t n, void **r) {
-    if(!r) return NULL;
+static struct cc_result re_negated_sel(size_t n, void **r) {
+    if(!r) return cc_ok(NULL);
 
     assert(n > 0 && "zero-size selection");
 
@@ -180,48 +180,48 @@ static void *re_negated_sel(size_t n, void **r) {
     else {
         struct cc_parser **ps = malloc(n * sizeof(struct cc_parser*));
         if(!ps)
-            return NULL;
+            return cc_ok(NULL);
     
         memcpy(ps, r, n *sizeof(struct cc_parser*));
         or = cc_free_data(cc_orv((unsigned) n, ps));
     }
 
-    return cc_seq(cc_fold_last, cc_not(or), cc_any());
+    return cc_ok(cc_seq(cc_fold_last, cc_not(or), cc_any()));
 }
 
-static void *re_seq(size_t n, void **r) {
-    if(!r) return NULL;
-    if(n == 0) cc_pass();
-    if(n == 1) return r[0];
-    if(n == 2) return cc_either(r[0], r[1]);
+static struct cc_result re_seq(size_t n, void **r) {
+    if(!r) return cc_ok(NULL);
+    if(n == 0) return cc_ok(cc_pass());
+    if(n == 1) return cc_ok(r[0]);
+    if(n == 2) return cc_ok(cc_either(r[0], r[1]));
 
     struct cc_parser **ps = malloc(n * sizeof(struct cc_parser*));
     memcpy(ps, r, n * sizeof(struct cc_parser*));
 
-    return cc_free_data(cc_andv((unsigned) n, cc_fold_concat, ps));
+    return cc_ok(cc_free_data(cc_andv((unsigned) n, cc_fold_concat, ps)));
 }
 
-static void *re_apply_qop_many(void *) {
-    return (void *) RE_QUANT_MANY;
+static struct cc_result re_apply_qop_many(void *) {
+    return cc_ok((void *) RE_QUANT_MANY);
 }
 
-static void *re_apply_qop_least1(void *) {
-    return (void *) RE_QUANT_LEAST1;
+static struct cc_result re_apply_qop_least1(void *) {
+    return cc_ok((void *) RE_QUANT_LEAST1);
 }
 
-static void *re_apply_qop_opt(void *) {
-    return (void *) RE_QUANT_OPT;
+static struct cc_result re_apply_qop_opt(void *) {
+    return cc_ok((void *) RE_QUANT_OPT);
 }
 
-static void *re_quantify(size_t n, void **r) {
-    if(n == 0) return NULL; // error propagation
-    if(n == 1) return r[0];
+static struct cc_result re_quantify(size_t n, void **r) {
+    if(n == 0) return cc_ok(NULL); // error propagation
+    if(n == 1) return cc_ok(r[0]);
 
     assert(n >= 2 && "re_quantor() cannot be applied to n < 2");
 
     struct cc_parser *p = r[0];
     if(!p)
-        return NULL; // error propagation
+        return cc_ok(NULL); // error propagation
 
     for(size_t i = 1; i < n; i++) {
         char32_t qop = (char32_t) (uintptr_t) r[i];
@@ -241,18 +241,18 @@ static void *re_quantify(size_t n, void **r) {
         }
     }
 
-    return (void*) p;
+    return cc_ok((void*) p);
 }
 
-static void *re_alt(size_t n, void **r) {
-    if(!r) return NULL; // error propagation
-    if(n == 1) return r[0];
+static struct cc_result re_alt(size_t n, void **r) {
+    if(!r) return cc_ok(NULL); // error propagation
+    if(n == 1) return cc_ok(r[0]);
 
     assert(n % 2 == 1 && "re_alt() cannot be applied to even n");
 
     struct cc_parser **ps = malloc((n + 1) / 2 * sizeof(struct cc_parser*));
     if(!ps)
-        return NULL;
+        return cc_ok(NULL);
 
     ps[0] = r[0];
 
@@ -260,7 +260,7 @@ static void *re_alt(size_t n, void **r) {
         ps[(i + 1) / 2] = r[i + 1];
     }
 
-    return cc_free_data(cc_orv((n + 1) / 2, ps));
+    return cc_ok(cc_free_data(cc_orv((n + 1) / 2, ps)));
 }
 
 static struct cc_parser *re_expr_fix(struct cc_parser *self, void*) {

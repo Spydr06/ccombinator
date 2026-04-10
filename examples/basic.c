@@ -19,7 +19,7 @@ int main() {
         cc_eof()
     );
 
-    struct cc_source *s = cc_string_source(u8"uint64_t!");
+    struct cc_source *s = cc_string_source(u8"uint~64_t!");
 
     struct cc_result r;
     int err = cc_parse(s, p, &r);

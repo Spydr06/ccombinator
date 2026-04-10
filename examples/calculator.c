@@ -4,21 +4,21 @@
 #include <stdlib.h>
 #include <locale.h>
 
-void *read_int(void *r) {
+struct cc_result read_int(void *r) {
     if(!r)
-        return 0;
+        return cc_ok(NULL);
 
     intptr_t n = atol(r); // safe here, since `r` only consists of digits
     free(r);
-    return (void*) n;
+    return cc_ok((void*) n);
 }
 
-void *calc_negate(void *r) {
+struct cc_result calc_negate(void *r) {
     intptr_t i = (intptr_t) r; 
-    return (void*) -i;
+    return cc_ok((void*) -i);
 }
 
-void *calc_prod(size_t n, void **r) {
+struct cc_result calc_prod(size_t n, void **r) {
     intptr_t p = (intptr_t) r[0];
 
     for(size_t i = 1; i < n; i += 2) {
@@ -30,10 +30,10 @@ void *calc_prod(size_t n, void **r) {
         free(r[i]);
     }
 
-    return (void*) p;
+    return cc_ok((void*) p);
 }
 
-void *calc_sum(size_t n, void **r) {
+struct cc_result calc_sum(size_t n, void **r) {
     intptr_t s = (intptr_t) r[0];
 
     for(size_t i = 1; i < n; i += 2) {
@@ -45,7 +45,7 @@ void *calc_sum(size_t n, void **r) {
         free(r[i]);
     }
 
-    return (void*) s;
+    return cc_ok((void*) s);
 }
 
 struct cc_parser *term_parser(struct cc_parser *self, void*) {

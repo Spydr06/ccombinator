@@ -110,25 +110,6 @@ static int new_error(struct cc_error *e, struct cc_state *s, const char *msg, bo
     return 0;
 }
 
-static int add_expected(struct cc_error *e, struct cc_state *s, const char *expected) {
-    if(is_noerror(s) || e->num_expected >= CC_ERR_MAX_EXPECTED)
-        return 0; // cannot add anymore, don't error tho
-
-    if(e->num_expected == 0) {
-        e->filename = s->src->origin;
-        e->loc = s->loc;
-        e->received = peek_at(s);
-    }
-
-    char *expected_copy = strdup(expected);
-    if(!expected_copy)
-        return errno;
-
-    e->expected[e->num_expected++] = expected_copy;
-
-    return 0;
-}
-
 static inline char32_t advance_char(struct cc_state *s, char32_t ch) {
     s->loc.byte_off += utf8_cp_length(ch);
 
@@ -150,22 +131,22 @@ static int allocate_string(char8_t **s, size_t n) {
     return 0;
 }
 
-static int char_result(char8_t **r, char32_t ch) {
-    int err = allocate_string(r, utf8_cp_length(ch));
+static int char_result(struct cc_result *r, char32_t ch) {
+    int err = allocate_string((char8_t**) &r->out, utf8_cp_length(ch));
     if(err)
         return err;
 
-    utf8_encode(ch, *r);
+    utf8_encode(ch, r->out);
     return 0;
 }
 
-static int string_result(char8_t **r, const char8_t *str) {
+static int string_result(struct cc_result *r, const char8_t *str) {
     size_t len = strlen((const char*) str);
-    int err = allocate_string(r, len);
+    int err = allocate_string((char8_t**) &r->out, len);
     if(err)
         return err;
 
-    memcpy(*r, str, len * sizeof(char));
+    memcpy(r->out, str, len * sizeof(char));
     return 0;
 }
 
@@ -176,7 +157,7 @@ static int match_char(struct cc_state *s, char32_t ch, struct cc_lazy **r) {
 
     advance_char(s, ch);
 
-    if(r != NULL && !is_noreturn(s) && !(*r = LAZY_UPCAST(lazy_char(next))))
+    if(r != NULL && !is_noreturn(s) && !(*r = LAZY_UPCAST(lazy_char(s->loc, next))))
         return -ENOMEM;
 
     return PARSE_SUCCESS;
@@ -189,7 +170,7 @@ static int match_char_func(struct cc_state *s, int(*f)(char32_t), struct cc_lazy
 
     advance_char(s, next);
 
-    if(!is_noreturn(s) && !(*r = LAZY_UPCAST(lazy_char(next))))
+    if(!is_noreturn(s) && !(*r = LAZY_UPCAST(lazy_char(s->loc, next))))
         return -ENOMEM;
     
     return PARSE_SUCCESS;
@@ -213,7 +194,7 @@ static int match_any(struct cc_state *s, struct cc_lazy **r) {
 
     advance_char(s, next);
 
-    if(!is_noreturn(s) && !(*r = LAZY_UPCAST(lazy_char(next))))
+    if(!is_noreturn(s) && !(*r = LAZY_UPCAST(lazy_char(s->loc, next))))
         return -ENOMEM;
 
     return PARSE_SUCCESS;
@@ -226,7 +207,7 @@ static int match_range(struct cc_state *s, char32_t lo, char32_t hi, struct cc_l
 
     advance_char(s, next);
 
-    if(!is_noreturn(s) && !(*r = LAZY_UPCAST(lazy_char(next))))
+    if(!is_noreturn(s) && !(*r = LAZY_UPCAST(lazy_char(s->loc, next))))
         return -ENOMEM;
 
     return PARSE_SUCCESS;
@@ -251,7 +232,7 @@ static int match_oneof(struct cc_state *s, const char32_t *chars, size_t n, stru
 
     advance_char(s, next);
 
-    if(!is_noreturn(s) && !(*r = LAZY_UPCAST(lazy_char(next))))
+    if(!is_noreturn(s) && !(*r = LAZY_UPCAST(lazy_char(s->loc, next))))
         return -ENOMEM;
 
     return PARSE_SUCCESS;
@@ -266,7 +247,7 @@ static int match_anyof(struct cc_state *s, const char32_t *chars, size_t n, stru
         if(next == chars[i]) {
             advance_char(s, next);
 
-            if(!is_noreturn(s) && !(*r = LAZY_UPCAST(lazy_char(next))))
+            if(!is_noreturn(s) && !(*r = LAZY_UPCAST(lazy_char(s->loc, next))))
                 return -ENOMEM;
 
             return PARSE_SUCCESS;
@@ -288,7 +269,7 @@ static int match_noneof(struct cc_state *s, const char32_t *chars, size_t n, str
 
     advance_char(s, next);
 
-    if(!is_noreturn(s) && !(*r = LAZY_UPCAST(lazy_char(next))))
+    if(!is_noreturn(s) && !(*r = LAZY_UPCAST(lazy_char(s->loc, next))))
         return -ENOMEM;
 
     return PARSE_SUCCESS;
@@ -307,7 +288,7 @@ static int match_string(struct cc_state *s, struct cc_parser *p, struct cc_lazy 
         i += utf8_cp_length(ch);
     }
 
-    if(!is_noreturn(s) && !(*r = LAZY_UPCAST(lazy_terminal(p))))
+    if(!is_noreturn(s) && !(*r = LAZY_UPCAST(lazy_terminal(s->loc, p))))
         return -ENOMEM;
 
     return PARSE_SUCCESS;
@@ -331,17 +312,17 @@ static int call_terminal(struct cc_state *s, struct cc_parser *p, struct cc_lazy
             return PARSE_SUCCESS;
         
         case PARSER_LOCATION:
-            if(!is_noreturn(s) && !((*r) = LAZY_UPCAST(lazy_inline(&s->loc, sizeof(struct cc_location)))))
+            if(!is_noreturn(s) && !((*r) = LAZY_UPCAST(lazy_inline(s->loc, &s->loc, sizeof(struct cc_location)))))
                 return -ENOMEM;
             return PARSE_SUCCESS;
 
         case PARSER_LIFT:
-            if(!is_noreturn(s) && !((*r) = LAZY_UPCAST(lazy_lift(p->match.lift.lf))))
+            if(!is_noreturn(s) && !((*r) = LAZY_UPCAST(lazy_lift(s->loc, p->match.lift.lf))))
                 return -ENOMEM;
             return PARSE_SUCCESS;
 
         case PARSER_LIFT_VAL:
-            if(!is_noreturn(s) && !((*r) = LAZY_UPCAST(lazy_value(p->match.lift.val))))
+            if(!is_noreturn(s) && !((*r) = LAZY_UPCAST(lazy_value(s->loc, p->match.lift.val))))
                 return -ENOMEM;
             return PARSE_SUCCESS;
 
@@ -465,11 +446,14 @@ __internal struct cc_lazy *result_top(struct result_stack *st) {
     return st->items[st->count - 1];
 }
 
-static int lazy_eval(struct result_stack *result_stack, struct data_stack *data_stack, void **result) {
+static int lazy_eval(struct result_stack *result_stack, struct data_stack *data_stack, struct cc_result *result) {
     assert(result_stack->count == 1 && "no result left on stack");
     data_stack->count = 0;
 
     int err = 0;
+    int res = PARSE_SUCCESS;
+
+    memset(result, 0, sizeof(struct cc_result));
 
     if(lazy_is_recursive(result_top(result_stack)) && (err = data_push(data_stack, 0u)))
         goto cleanup;
@@ -478,30 +462,32 @@ static int lazy_eval(struct result_stack *result_stack, struct data_stack *data_
         struct cc_lazy *lazy = result_top(result_stack); 
 
         if(!lazy) {
-            *result = NULL;
+            result->out = NULL;
             result_pop(result_stack);
             continue;
         }
 
+        assert(result->err == NULL);
+
         switch(lazy->type) {
         case LAZY_VALUE:
-            *result = LAZY_DOWNCAST(lazy, struct cc_lazy_value)->value;
+            result->out = LAZY_DOWNCAST(lazy, struct cc_lazy_value)->value;
             break;
         case LAZY_INLINE:
             struct cc_lazy_inline *inl = LAZY_DOWNCAST(lazy, struct cc_lazy_inline);
-            if(!(*result = malloc(inl->size)))
+            if(!(result->out = malloc(inl->size)))
                 return errno;
             
-            memcpy(*result, inl->value, inl->size);
+            memcpy(result->out, inl->value, inl->size);
             break;
         case LAZY_CHAR:
-            char_result((char8_t**) result, LAZY_DOWNCAST(lazy, struct cc_lazy_char)->ch); 
+            char_result(result, LAZY_DOWNCAST(lazy, struct cc_lazy_char)->ch); 
             break;
         case LAZY_TERMINAL:
             struct cc_lazy_terminal *term = LAZY_DOWNCAST(lazy, struct cc_lazy_terminal);
             switch(term->p->type) {
                 case PARSER_STRING:
-                    string_result((char8_t**) result, term->p->match.str);
+                    string_result(result, term->p->match.str);
                     break;
                 default:
                     assert(false && "unexpected parser type");
@@ -517,7 +503,7 @@ static int lazy_eval(struct result_stack *result_stack, struct data_stack *data_
 
             if(state > 0) {
                 // save the previous result
-                fold->values[state - 1] = *result;
+                fold->values[state - 1] = result->out;
             }
 
             if(state < fold->n) {
@@ -550,7 +536,7 @@ static int lazy_eval(struct result_stack *result_stack, struct data_stack *data_
                     goto cleanup;
                 continue;
             case 1:
-                *result = apply->apply(*result); 
+                *result = apply->apply(result->out); 
                 apply->value = NULL;
                 break;
             default:
@@ -564,13 +550,18 @@ static int lazy_eval(struct result_stack *result_stack, struct data_stack *data_
             unreachable();
         }
 
+        if(result->err) {
+            res = PARSE_FAILURE;
+            goto cleanup;
+        }
+
         if((err = lazy_free(result_pop(result_stack), result_stack)))
             goto cleanup;
     }
 
     assert(data_stack->count == 0 && "data stack is not empty");
 cleanup:
-    return err;
+    return res == PARSE_SUCCESS ? -err : PARSE_FAILURE;
 }
 
 static int ir_eval(struct cc_state *s, struct cc_parser *p, struct cc_result *r) {
@@ -580,6 +571,10 @@ static int ir_eval(struct cc_state *s, struct cc_parser *p, struct cc_result *r)
 
     int err;
     uint32_t call_success = PARSE_SUCCESS;
+
+    if(!(r->err = malloc(sizeof(struct cc_error))))
+        return -errno;
+    memset(r->err, 0, sizeof(struct cc_error));
 
     if((err = call_push(&call_stack, (struct call){
         .parser = p,
@@ -754,7 +749,7 @@ static int ir_eval(struct cc_state *s, struct cc_parser *p, struct cc_result *r)
             assert(result_stack.count >= n);
             result_stack.count -= n;
 
-            struct cc_lazy_fold *fold = lazy_fold(t->parser->fold, n, result_stack.items + result_stack.count);
+            struct cc_lazy_fold *fold = lazy_fold(s->loc, t->parser->fold, n, result_stack.items + result_stack.count);
             if(!fold) {
                 err = ENOMEM;
                 goto cleanup;
@@ -773,7 +768,7 @@ static int ir_eval(struct cc_state *s, struct cc_parser *p, struct cc_result *r)
             assert(result_stack.count > 0);
 
             struct cc_lazy *result_top = result_stack.items[result_stack.count - 1];
-            struct cc_lazy_apply *apply = lazy_apply(t->parser->match.apply.af, result_top);
+            struct cc_lazy_apply *apply = lazy_apply(s->loc, t->parser->match.apply.af, result_top);
             if(!apply) {
                 err = ENOMEM;
                 goto cleanup;
@@ -784,8 +779,16 @@ static int ir_eval(struct cc_state *s, struct cc_parser *p, struct cc_result *r)
 
         case IR_EXPECT:
             assert(t->parser->type == PARSER_EXPECT);
-            if((err = add_expected(r->err, s, t->parser->match.expect.what)))
-                goto cleanup;
+            if(is_noerror(s))
+                continue;
+
+            if(r->err->num_expected == 0) {
+                r->err->filename = s->src->origin;
+                r->err->loc = s->loc;
+                r->err->received = peek_at(s);
+            }
+
+            cc_add_expected(r->err, t->parser->match.expect.what);
             continue;
 
         case IR_PUSH_BINDING:
@@ -796,8 +799,10 @@ static int ir_eval(struct cc_state *s, struct cc_parser *p, struct cc_result *r)
 
         case IR_POP_BINDING:
             assert(t->parser->type == PARSER_BIND);
-            if(scope_pop(s) != t->parser)
+            if(scope_pop(s) != t->parser->match.bind.binding) {
                 assert(false && "scope stack corrupt");
+                unreachable();
+            }
             continue;
 
         case IR_NULL_RESULT:
@@ -867,7 +872,12 @@ static int ir_eval(struct cc_state *s, struct cc_parser *p, struct cc_result *r)
     call_success = data_pop(&data_stack);
 
     if(call_success == PARSE_SUCCESS && !is_noreturn(s)) {
-        err = lazy_eval(&result_stack, &data_stack, &r->out);
+        cc_err_free(r->err);
+
+        if((err = lazy_eval(&result_stack, &data_stack, r)) < 0)
+            err = -err;
+        else
+            call_success = err;
     }
 cleanup:
     while(result_stack.count > 0) {
@@ -902,19 +912,14 @@ int cc_parse(const struct cc_source *src, struct cc_parser *p, struct cc_result 
         .scope = DYNARR_INIT,
     };
     
-    if(!(r->err = malloc(sizeof(struct cc_error)))) {
-        err = errno;
-        goto cleanup;
-    }
-    
-    memset(r->err, 0, sizeof(struct cc_error));
+    r->err = NULL;
     r->out = NULL;
 
     int res = ir_eval(&s, p, r);
 
     if(res < 0) {
         // resource error, ideally this should never happen
-        free(r->err);
+        cc_err_free(r->err);
         err = -res;
         goto cleanup;
     }

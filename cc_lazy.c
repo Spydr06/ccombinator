@@ -1,61 +1,66 @@
 #include "internal.h"
 
-__internal struct cc_lazy_value *lazy_value(void *value) {
+__internal struct cc_lazy_value *lazy_value(struct cc_location loc, void *value) {
     struct cc_lazy_value *lazy = malloc(sizeof(struct cc_lazy_value));
     if(!lazy)
         return NULL;
 
     lazy->lazy.type = LAZY_VALUE;
+    lazy->lazy.location = loc;
     lazy->value = value;
 
     return lazy;
 }
 
-__internal struct cc_lazy_inline *lazy_inline(void *value, size_t size) {
+__internal struct cc_lazy_inline *lazy_inline(struct cc_location loc, void *value, size_t size) {
     struct cc_lazy_inline *lazy = malloc(sizeof(struct cc_lazy_inline) + size);
     if(!lazy)
         return NULL;
 
     lazy->lazy.type = LAZY_INLINE;
+    lazy->lazy.location = loc;
     memcpy(lazy->value, value, size);
 
     return lazy;
 }
 
-__internal struct cc_lazy_char *lazy_char(char32_t ch) {
+__internal struct cc_lazy_char *lazy_char(struct cc_location loc, char32_t ch) {
     struct cc_lazy_char *lazy = malloc(sizeof(struct cc_lazy_char));
     if(!lazy)
         return NULL;
 
     lazy->lazy.type = LAZY_CHAR;
+    lazy->lazy.location = loc;
     lazy->ch = ch;
 
     return lazy;
 }
 
-__internal struct cc_lazy_terminal *lazy_terminal(struct cc_parser *p) {
+__internal struct cc_lazy_terminal *lazy_terminal(struct cc_location loc, struct cc_parser *p) {
     struct cc_lazy_terminal *lazy = malloc(sizeof(struct cc_lazy_terminal));
     if(!lazy)
         return NULL;
 
     lazy->lazy.type = LAZY_TERMINAL;
+    lazy->lazy.location = loc;
     lazy->p = cc_retain(p);
 
     return lazy;
 }
 
-__internal struct cc_lazy_lift *lazy_lift(cc_lift_t lift) {
+__internal struct cc_lazy_lift *lazy_lift(struct cc_location loc, cc_lift_t lift) {
     struct cc_lazy_lift *lazy = malloc(sizeof(struct cc_lazy_lift));
     if(!lazy)
         return NULL;
 
     lazy->lazy.type = LAZY_LIFT;
+    lazy->lazy.location = loc;
     lazy->lift = lift;
 
     return lazy;
 }
 
-__internal struct cc_lazy_fold *lazy_fold(cc_fold_t fold, unsigned n, struct cc_lazy *values[]) {
+__internal struct cc_lazy_fold *lazy_fold(struct cc_location loc, cc_fold_t fold, unsigned n, struct cc_lazy *values[]) {
     struct cc_lazy_fold *lazy = malloc(sizeof(struct cc_lazy_fold) + n * sizeof(struct cc_lazy*));
     if(!lazy)
         return NULL;
@@ -63,6 +68,7 @@ __internal struct cc_lazy_fold *lazy_fold(cc_fold_t fold, unsigned n, struct cc_
     assert(fold != NULL);
 
     lazy->lazy.type = LAZY_FOLD;
+    lazy->lazy.location = loc;
     lazy->fold = fold;
     lazy->n = n;
 
@@ -71,7 +77,7 @@ __internal struct cc_lazy_fold *lazy_fold(cc_fold_t fold, unsigned n, struct cc_
     return lazy;
 }
 
-__internal struct cc_lazy_apply *lazy_apply(cc_apply_t apply, struct cc_lazy *value) {
+__internal struct cc_lazy_apply *lazy_apply(struct cc_location loc, cc_apply_t apply, struct cc_lazy *value) {
     struct cc_lazy_apply *lazy = malloc(sizeof(struct cc_lazy_apply));
     if(!lazy)
         return NULL;
@@ -79,6 +85,7 @@ __internal struct cc_lazy_apply *lazy_apply(cc_apply_t apply, struct cc_lazy *va
     assert(apply != NULL);
 
     lazy->lazy.type = LAZY_APPLY;
+    lazy->lazy.location = loc;
     lazy->apply = apply;
     lazy->value = value;
 
