@@ -98,18 +98,35 @@ struct cc_error {
     char32_t received;
 };
 
+// generates an error with a given error message
 struct cc_error *cc_error(const char *failure);
 CC_format_printf(1)
 struct cc_error *cc_errorf(const char *fmt, ...);
 
+// adds an 'expected `...`' field to an existing error
 struct cc_error *cc_add_expected(struct cc_error *e, const char *exp);
 CC_format_printf(2)
 struct cc_error *cc_add_expectedf(struct cc_error *e, const char *fmt, ...);
 
+// sets the error location and filename of an existing error
 struct cc_error *cc_with_filename(struct cc_error *e, const char *filename);
 struct cc_error *cc_with_location(struct cc_error *e, struct cc_location loc);
 
+// sets the 'at `...`' field of an existing error
 struct cc_error *cc_with_received(struct cc_error *e, char32_t received);
+
+// converts an error report (`struct cc_error`) into a printable error message.
+// the resulting string must be freed.
+// on error, errno is set to the error code and NULL is returned.
+char *cc_err_string(struct cc_error *e);
+
+// prints an error report directly without turning it into a string before.
+// returns an errno value on error and `0` on success.
+int cc_err_print(struct cc_error *e);
+int cc_err_fprint(struct cc_error *e, FILE *f);
+
+// frees an error report struct
+void cc_err_free(struct cc_error *e);
 
 // represents the result of a cc_parse() call.
 // on a parsing error, `err` will point to a `cc_error` struct, which must be freed using `cc_err_free`.
@@ -126,19 +143,6 @@ static inline struct cc_result cc_ok(void *out) {
 static inline struct cc_result cc_err(struct cc_error *err) {
     return (struct cc_result){.err = err, .out = NULL};
 }
-
-// converts an error report (`struct cc_error`) into a printable error message.
-// the resulting string must be freed.
-// on error, errno is set to the error code and NULL is returned.
-char *cc_err_string(struct cc_error *e);
-
-// prints an error report directly without turning it into a string before.
-// returns an errno value on error and `0` on success.
-int cc_err_print(struct cc_error *e);
-int cc_err_fprint(struct cc_error *e, FILE *f);
-
-// frees an error report struct
-void cc_err_free(struct cc_error *e);
 
 /*
  * Parsers

@@ -127,6 +127,39 @@ Functions that accept a parameter of type `struct cc_parser *` consume a referen
     void cc_err_free(struct cc_error *e);
     ```
 
+- Error Generation:
+    ```c
+    struct cc_error *cc_error(const char *failure);
+    struct cc_error *cc_errorf(const char *fmt, ...);
+    ```
+    
+    - Adds an `expected '...'`-field:
+        ```c
+        struct cc_error *cc_add_expected(struct cc_error *e, const char *exp);
+        struct cc_error *cc_add_expectedf(struct cc_error *e, const char *fmt, ...);
+        ```
+
+    - Sets the `at '...'`-field:
+        ```c
+        struct cc_error *cc_with_received(struct cc_error *e, char32_t received);
+        ```
+
+    - Sets the error location:
+        ```c
+        struct cc_error *cc_with_filename(struct cc_error *e, const char *filename);
+        struct cc_error *cc_with_location(struct cc_error *e, struct cc_location loc);
+        ```
+
+- Results:
+
+    Values of type `struct cc_result` represent a successful return value, if the `err` field is `NULL`, or contain an error message in `err` otherwise.
+
+    - Constructors:
+        ```c
+        struct cc_result cc_ok(void *out);
+        struct cc_result cc_err(struct cc_error *err);
+        ```
+
 Functions returning `int` (e.g. `cc_parse`), return `0` on success or a non-zero errno value on failure.
 
 ### Terminal Parsers
@@ -391,7 +424,7 @@ The following functions construct parser combinators that take in other parsers.
 
 ### Grammars
 
-A `cc_grammar` represents a list of named `cc_parser`s.
+A `cc_grammar` represents a list of named `cc_parser`s (Rules).
 
 - Returns a parser with the name `name` in the grammar `g`:
     ```c
@@ -405,6 +438,11 @@ A `cc_grammar` represents a list of named `cc_parser`s.
     ```
     This also calls `cc_release` on every contained parser.
 
+- Gets a single rule (as an entry-point for parsing):
+    ```c
+    struct cc_parser *cc_rule(const struct cc_grammar *g, const char *name);
+    ```
+
 #### Regular Expressions:
 
 The following functions aid constructing a parser by supplying a regular expression:
@@ -413,25 +451,55 @@ struct cc_parser *cc_regex_from(const struct cc_source *s, struct cc_error **e);
 struct cc_parser *cc_regex(const char8_t *re, struct cc_error **e);
 ```
 
-Supported regular expressions are:
+**Supported regular expressions:**
 
-- any symbol `.`
-- end-of-file (EOF) symbol `$`
-- start-of-file (SOF) symbol `^`
-- character classes `\a`, `\d`, `\D`, `\l`, `\s`, `\S`, `\u`, `\w`, `\W`, `\x`
-- posix-like character classes `[:alpha:]`, `[:digit:]`, ...
-- character selections `[a-zA-z0-9_]`
-- negated character selections `[^a-zA-Z]`
-- groupings `(...)` 
-- quantifiers `*`, `+`, `?`
-- alternations `a|b|c`
+- Any symbol `.`
+- End-of-file (EOF) symbol `$`
+- Start-of-file (SOF) symbol `^`
+- Character classes `\a`, `\d`, `\D`, `\l`, `\s`, `\S`, `\u`, `\w`, `\W`, `\x`
+- Posix-like character classes `[:alpha:]`, `[:digit:]`, ...
+- Character selections `[a-zA-z0-9_]`
+- Negated character selections `[^a-zA-Z]`
+- Groupings `(...)` 
+- Quantifiers `*`, `+`, `?`
+- Alternations `a|b|c`
 
 #### Backus-Naur Form (BNF)
-The following functions aid constructing a grammar by supplying a grammar in an extended backus-naur form:
+
+Grammars are generated from an input source in an [extended Backus-Naur Form](https://en.wikipedia.org/wiki/Extended_Backus%E2%80%93Naur_form).
+
 ```c
-struct cc_grammar *cc_bnf_from(const struct cc_source *s, struct cc_error **e);
-struct cc_grammar *cc_bnf(const char8_t *s, struct cc_error **e);
+struct cc_grammar *cc_bnf_from(const struct cc_source *s, const struct cc_action actions[], struct cc_error **e);
+struct cc_grammar *cc_bnf(const char8_t *s, const struct cc_action actions[], struct cc_error **e);
 ```
+
+- Actions:
+
+    Actions are used to reference callback functions from within the BNF code. As they come in various types, multiple constructors exist:
+    ```c
+    struct cc_action cc_action_value(const char *name, void *value);
+    struct cc_action cc_action_fold(const char *name, cc_fold_t fold);
+    struct cc_action cc_action_apply(const char *name, cc_apply_t apply);
+    struct cc_action cc_action_lift(const char *name, cc_lift_t lift);
+    struct cc_action cc_action_match(const char *name, cc_match_t match);
+    ```
+    When passing actions to `cc_bnf`/`cc_bnf_from`, be sure to terminate the array with `CC_NULL_ACTION()`. It is best to use the `CC_ACTIONS(...)` macro for this.
+
+**Supported expressions:**
+
+- Rule Defintions: `myrule = ... ;` (top-level)
+- Terminals: `"foo"`, `'bar'`, ...
+- Lift/value actions: `@action` (generate `cc_lift(action)`/`cc_lift_val(action)` parsers)
+- Matching actions: `@action` (generates `cc_match(action)`)
+- Groupings: `( ... )`
+- Function applications: `@action(...)` (generates `cc_apply(..., action)`)
+- Optionals: `[ ... ]`
+- Repetitions: `{ ... }`
+- Repetitions with folding action: `@action{ ... }` (generates `cc_many(action, ...)`)
+- Exceptions: `a - b` (match everything in a and not in b)
+- Concatenations: `a , b , ...`
+- Concatenations with folding action: `@action: a, b, ...`
+- Alternations: `a | b | ...`
 
 ### Input Sources
 
