@@ -332,11 +332,11 @@ struct cc_parser *cc_any(void) {
 }
 
 struct cc_parser *cc_whitespace(void) {
-    return parser_match(utf8_is_whitespace, "whitespace character");
+    return parser_match(cc_is_whitespace, "whitespace character");
 }
 
 struct cc_parser *cc_blank(void) {
-    return parser_match(utf8_is_blank, "blank character");
+    return parser_match(cc_is_blank, "blank character");
 }
 
 struct cc_parser *cc_newline(void) {
@@ -348,27 +348,27 @@ struct cc_parser *cc_tab(void) {
 }
 
 struct cc_parser *cc_digit(void) {
-    return parser_match(utf8_is_digit, "digit");
+    return parser_match(cc_is_digit, "digit");
 }
 
 struct cc_parser *cc_hexdigit(void) {
-    return parser_match(utf8_is_hexdigit, "hexadecimal digit");
+    return parser_match(cc_is_hexdigit, "hexadecimal digit");
 }
 
 struct cc_parser *cc_octdigit(void) {
-    return parser_match(utf8_is_octdigit, "octal digit");
+    return parser_match(cc_is_octdigit, "octal digit");
 }
 
 struct cc_parser *cc_alpha(void) {
-    return parser_match(utf8_is_alpha, "alphabetical character");
+    return parser_match(cc_is_alpha, "alphabetical character");
 }
 
 struct cc_parser *cc_lower(void) {
-    return parser_match(utf8_is_lower, "lower-case character");
+    return parser_match(cc_is_lower, "lower-case character");
 }
 
 struct cc_parser *cc_upper(void) {
-    return parser_match(utf8_is_upper, "upper-case character");
+    return parser_match(cc_is_upper, "upper-case character");
 }
 
 struct cc_parser *cc_underscore(void) {
@@ -376,7 +376,7 @@ struct cc_parser *cc_underscore(void) {
 }
 
 struct cc_parser *cc_aplhanum(void) {
-    return parser_match(utf8_is_alphanum, "alphanumeric character");
+    return parser_match(cc_is_alphanum, "alphanumeric character");
 }
 
 struct cc_parser *cc_pass(void) {
@@ -453,7 +453,7 @@ struct cc_parser *cc_lift_val(void *val) {
     if(!p)
         return NULL;
 
-    p->type = PARSER_LIFT;
+    p->type = PARSER_LIFT_VAL;
     p->match.lift.val = val;
 
     return p;

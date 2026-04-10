@@ -65,7 +65,7 @@ static inline char32_t peek_at(struct cc_state *s) {
 }
 
 static inline void state_free(struct cc_state *s) {
-    free(s->scope.elems);
+    dynarr_free(&s->scope);
 }
 
 static inline int scope_push(struct cc_state *s, struct cc_binding *b) {
@@ -446,7 +446,7 @@ __internal struct cc_lazy *result_top(struct result_stack *st) {
     return st->items[st->count - 1];
 }
 
-static int lazy_eval(struct result_stack *result_stack, struct data_stack *data_stack, struct cc_result *result) {
+static int lazy_eval(struct cc_state *s, struct result_stack *result_stack, struct data_stack *data_stack, struct cc_result *result) {
     assert(result_stack->count == 1 && "no result left on stack");
     data_stack->count = 0;
 
@@ -551,6 +551,12 @@ static int lazy_eval(struct result_stack *result_stack, struct data_stack *data_
         }
 
         if(result->err) {
+            cc_with_filename(result->err, s->src->origin);
+            cc_with_location(result->err, lazy->location);
+
+            // FIXME:
+            // result_stack->count = 0;
+
             res = PARSE_FAILURE;
             goto cleanup;
         }
@@ -874,7 +880,7 @@ static int ir_eval(struct cc_state *s, struct cc_parser *p, struct cc_result *r)
     if(call_success == PARSE_SUCCESS && !is_noreturn(s)) {
         cc_err_free(r->err);
 
-        if((err = lazy_eval(&result_stack, &data_stack, r)) < 0)
+        if((err = lazy_eval(s, &result_stack, &data_stack, r)) < 0)
             err = -err;
         else
             call_success = err;
@@ -905,12 +911,12 @@ int cc_parse(const struct cc_source *src, struct cc_parser *p, struct cc_result 
         goto cleanup;
     }
 
-    struct cc_state s = {
-        .flags = CC_STATE_FLAGS_DEFAULT,
-        .loc = CC_LOCATION_DEFAULT,
-        .src = src,
-        .scope = DYNARR_INIT,
-    };
+    struct cc_state s;
+    memset(&s, 0, sizeof(struct cc_state));
+
+    s.flags = CC_STATE_FLAGS_DEFAULT;
+    s.loc = CC_LOCATION_DEFAULT;
+    s.src = src;
     
     r->err = NULL;
     r->out = NULL;

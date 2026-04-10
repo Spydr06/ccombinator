@@ -22,12 +22,11 @@ int main() {
         return EXIT_FAILURE;
     }
 
-    struct cc_error *e;
-    int res = cc_matches(u8"uint64_t!", re, &e);
+    int res = cc_matches(u8"uint64_t!", re, &err);
 
     if(res == CC_NOMATCH) {
-        cc_err_print(e);
-        cc_err_free(e);
+        cc_err_print(err);
+        cc_err_free(err);
     }
     else if(res < 0) {
         fprintf(stderr, "parse error: %s\n", strerror(errno));

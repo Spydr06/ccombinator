@@ -149,6 +149,11 @@ struct cc_error *cc_add_expected(struct cc_error *e, const char *expected) {
         return NULL; // cannot add anymore
     }
 
+    for(unsigned i = 0; i < e->num_expected; i++) {
+        if(strcmp(e->expected[i], expected) == 0)
+            return e;
+    }
+
     /*if(e->num_expected == 0) {
         e->filename = s->src->origin;
         e->loc = s->loc;
@@ -443,6 +448,60 @@ struct cc_result cc_apply_free(void *r) {
     return cc_ok(NULL);
 }
 
+// TODO: replace with proper UTF-8 functions
+
+int cc_is_whitespace(char32_t c) {
+    return c <= 0xff && isspace(c);
+}
+
+int cc_is_blank(char32_t c) {
+    return c <= 0xff && isblank(c);
+}
+
+int cc_is_print(char32_t c) {
+    return c <= 0xff && isprint(c);
+}
+
+int cc_is_cntrl(char32_t c) {
+    return c <= 0xff && iscntrl(c);
+}
+
+int cc_is_graph(char32_t c) {
+    return c <= 0xff && isgraph(c);
+}
+
+int cc_is_punct(char32_t c) {
+    return c <= 0xff && ispunct(c);
+}
+
+int cc_is_digit(char32_t c) {
+    return c >= U'0' && c <= U'9';
+}
+
+int cc_is_hexdigit(char32_t c) {
+    return c <= 0xff && isxdigit(c);
+}
+
+int cc_is_octdigit(char32_t c) {
+    return c >= U'0' && c < U'7';
+}
+
+int cc_is_alpha(char32_t c) {
+    return c <= 0xff && isalpha(c);
+}
+
+int cc_is_lower(char32_t c) {
+    return c <= 0xff && islower(c);
+}
+
+int cc_is_upper(char32_t c) {
+    return c <= 0xff && isupper(c);
+}
+
+int cc_is_alphanum(char32_t c) {
+    return c <= 0xff && isalnum(c);
+}
+
 int cc_matches(const char8_t *in, struct cc_parser *p, struct cc_error **e) {
     if(!p || !in)
         return -EINVAL;
@@ -478,7 +537,7 @@ int cc_matches(const char8_t *in, struct cc_parser *p, struct cc_error **e) {
     return CC_MATCH;
 }
 
-__internal int hashtable_init(struct cc_hashtable *t, size_t cap) {
+int hashtable_init(struct cc_hashtable *t, size_t cap) {
     if(!t || !cap)
         return EINVAL;
 
@@ -491,7 +550,7 @@ __internal int hashtable_init(struct cc_hashtable *t, size_t cap) {
     return 0;
 }
 
-__internal void hashtable_free(struct cc_hashtable *t) {
+void hashtable_free(struct cc_hashtable *t) {
     if(!t)
         return;
 
@@ -509,6 +568,8 @@ static int hashtable_insert(struct cc_hashtable *t, const char *k, void *v) {
 
     t->entries[i].key = k;
     t->entries[i].value = v;
+
+    return 0;
 }
 
 static int hashtable_expand(struct cc_hashtable *t) {
@@ -531,7 +592,7 @@ static int hashtable_expand(struct cc_hashtable *t) {
     return 0;
 }
 
-__internal int hashtable_set(struct cc_hashtable *t, const char *k, void *v) {
+int hashtable_set(struct cc_hashtable *t, const char *k, void *v) {
     if(!t || !k)
         return EINVAL;
 
@@ -547,7 +608,7 @@ __internal int hashtable_set(struct cc_hashtable *t, const char *k, void *v) {
     return 0;
 }
 
-__internal void *hashtable_get(struct cc_hashtable *t, const char *k) {
+void *hashtable_get(const struct cc_hashtable *t, const char *k) {
     if(!t || !k) {
         errno = EINVAL;
         return NULL;
@@ -561,5 +622,60 @@ __internal void *hashtable_get(struct cc_hashtable *t, const char *k) {
 
     errno = ENOENT;
     return NULL;
+}
+
+struct cc_grammar *grammar_init(size_t cap) {
+    struct cc_grammar *g = calloc(1, sizeof(struct cc_grammar));
+    if(!g)
+        return NULL;
+
+    int err;
+    if((err = hashtable_init(&g->rules, cap * 2))) {
+        errno = err;
+        return NULL;
+    }
+
+    return g;
+}
+
+void cc_grammar_free(struct cc_grammar *g) {
+    if(!g)
+        return;
+
+    for(size_t i = 0; i < g->rules.capacity; i++) {
+        if(!g->rules.entries[i].key)
+            continue;
+
+        free((void*) g->rules.entries[i].key);
+        cc_release(g->rules.entries[i].value);
+    }
+
+    hashtable_free(&g->rules);
+    free(g);
+}
+
+struct cc_parser *cc_rule(const struct cc_grammar *g, const char *name) {
+    if(!g || !name) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    struct cc_parser *found = cc_retain(hashtable_get(&g->rules, name));
+    if(!found)
+        return NULL;
+
+    struct cc_parser *p = cc_seq(cc_fold_first, found, cc_eof());
+    if(!p)
+        return NULL;
+
+    for(size_t i = 0; i < g->rules.capacity; i++) {
+        if(!g->rules.entries[i].key)
+            continue;
+
+        if(!(p = cc_bind(g->rules.entries[i].key, cc_retain(g->rules.entries[i].value), p)))
+            return NULL;
+    }
+
+    return p;
 }
 

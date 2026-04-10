@@ -171,6 +171,7 @@ __internal int lazy_free(struct cc_lazy *lazy, struct result_stack *stack) {
                 goto cleanup;
             break;
         default:
+            fprintf(stderr, "%d\n", lazy->type);
             assert(false && "unknown lazy type");
             unreachable();
         }

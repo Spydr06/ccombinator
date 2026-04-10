@@ -48,15 +48,15 @@ static struct cc_result re_sel_end_char(void *) {
 }
 
 static int re_not_digit(char32_t c) {
-    return !utf8_is_digit(c);
+    return !cc_is_digit(c);
 }
 
 static int re_not_whitespace(char32_t c) {
-    return !utf8_is_whitespace(c);
+    return !cc_is_whitespace(c);
 }
 
 static int re_is_word(char32_t c) {
-    return utf8_is_alphanum(c) || c == '_';
+    return cc_is_alphanum(c) || c == '_';
 }
 
 static int re_not_word(char32_t c) {
@@ -69,18 +69,18 @@ static const struct {
     const char8_t *class;
     int (*match)(char32_t);
 } re_posix_classes[RE_POSIX_CLASSES_COUNT] = {
-    { u8"cntrl", utf8_is_cntrl },
-    { u8"print", utf8_is_print },
-    { u8"space", utf8_is_whitespace },
-    { u8"blank", utf8_is_blank },
-    { u8"graph", utf8_is_graph },
-    { u8"punct", utf8_is_punct },
-    { u8"alnum", utf8_is_alphanum },
-    { u8"xdigit", utf8_is_hexdigit },
-    { u8"digit", utf8_is_digit},
-    { u8"alpha", utf8_is_alpha },
-    { u8"lower", utf8_is_lower },
-    { u8"upper", utf8_is_upper }
+    { u8"cntrl", cc_is_cntrl },
+    { u8"print", cc_is_print },
+    { u8"space", cc_is_whitespace },
+    { u8"blank", cc_is_blank },
+    { u8"graph", cc_is_graph },
+    { u8"punct", cc_is_punct },
+    { u8"alnum", cc_is_alphanum },
+    { u8"xdigit", cc_is_hexdigit },
+    { u8"digit", cc_is_digit},
+    { u8"alpha", cc_is_alpha },
+    { u8"lower", cc_is_lower },
+    { u8"upper", cc_is_upper }
 };
 
 static struct cc_result re_posix_class(void *r) {
@@ -393,11 +393,8 @@ struct cc_parser *cc_regex_from(const struct cc_source *re_source, struct cc_err
         return NULL;
 
     struct cc_result r;
-    int res = cc_parse(re_source, re, &r);
-    if(res < 0) {
-        errno = -res;
+    if((errno = cc_parse(re_source, re, &r)))
         return NULL;
-    }
 
     *e = r.err;
     return r.out;

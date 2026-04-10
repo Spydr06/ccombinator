@@ -157,7 +157,7 @@ int cc_debug_fdump(struct cc_parser *p, FILE *f) {
     return dump_parser(p, f, 0);
 }
 
-__internal const char *ir_str_opcode(enum cc_ir_opcode opcode) {
+const char *ir_str_opcode(enum cc_ir_opcode opcode) {
     switch(opcode) {
         case IR_PUSH:
             return "push";
@@ -212,7 +212,7 @@ __internal const char *ir_str_opcode(enum cc_ir_opcode opcode) {
     }
 }
 
-__internal int ir_dump(const struct cc_ir *ir, FILE *f) {
+int ir_dump(const struct cc_ir *ir, FILE *f) {
     if(!ir) {
         fprintf(f, "No IR generated.\n");
         return 0;
@@ -259,7 +259,7 @@ __internal int ir_dump(const struct cc_ir *ir, FILE *f) {
     return 0;
 }
 
-__internal void lazy_debug_dump(const struct cc_lazy *lazy, FILE *f) {
+void lazy_debug_dump(const struct cc_lazy *lazy, FILE *f) {
     if(!lazy) {
         fprintf(f, "<null>");
         return;
@@ -303,6 +303,25 @@ __internal void lazy_debug_dump(const struct cc_lazy *lazy, FILE *f) {
         break;
     default:
         fprintf(f, "<unknown>");
+    }
+}
+
+const char *action_to_string(enum cc_action_type a) {
+    switch(a) {
+    case CC_ACTION_NULL:
+        return "<null>";
+    case CC_ACTION_APPLY:
+        return "apply";
+    case CC_ACTION_FOLD:
+        return "fold";
+    case CC_ACTION_LIFT:
+        return "lift";
+    case CC_ACTION_VALUE:
+        return "value";
+    case CC_ACTION_MATCH:
+        return "match";
+    default:
+        return "<unknown>";
     }
 }
 

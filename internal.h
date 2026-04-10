@@ -156,6 +156,8 @@ struct cc_parser {
             unsigned n;
             struct cc_parser **inner;
         } variadic;
+
+        struct cc_grammar *grammar;
     } match;
 };
 
@@ -392,65 +394,15 @@ static inline char32_t utf8_first_cp(const uint8_t *s) {
     return (char32_t) value;
 } 
 
-// TODO: replace with proper UTF-8 functions
-
-static inline int utf8_is_whitespace(char32_t c) {
-    return c <= 0xff && isspace(c);
-}
-
-static inline int utf8_is_blank(char32_t c) {
-    return c <= 0xff && isblank(c);
-}
-
-static inline int utf8_is_print(char32_t c) {
-    return c <= 0xff && isprint(c);
-}
-
-static inline int utf8_is_cntrl(char32_t c) {
-    return c <= 0xff && iscntrl(c);
-}
-
-static inline int utf8_is_graph(char32_t c) {
-    return c <= 0xff && isgraph(c);
-}
-
-static inline int utf8_is_punct(char32_t c) {
-    return c <= 0xff && ispunct(c);
-}
-
-static inline int utf8_is_digit(char32_t c) {
-    return c >= U'0' && c <= U'9';
-}
-
-static inline int utf8_is_hexdigit(char32_t c) {
-    return c <= 0xff && isxdigit(c);
-}
-
-static inline int utf8_is_octdigit(char32_t c) {
-    return c >= U'0' && c < U'7';
-}
-
-static inline int utf8_is_alpha(char32_t c) {
-    return c <= 0xff && isalpha(c);
-}
-
-static inline int utf8_is_lower(char32_t c) {
-    return c <= 0xff && islower(c);
-}
-
-static inline int utf8_is_upper(char32_t c) {
-    return c <= 0xff && isupper(c);
-}
-
-static inline int utf8_is_alphanum(char32_t c) {
-    return c <= 0xff && isalnum(c);
-}
-
 static inline uint8_t utf8_cp_length(char32_t cp) {
     return 1u
         + (cp >= 0x80)
         + (cp >= 0x800)
         + (cp >= 0x10000);
+}
+
+static inline bool utf8_single_char(const char8_t *s) {
+    return s[0] != '\0' && s[utf8_cp_length(s[0])] == '\0';
 }
 
 static inline int utf8_encode(char32_t cp, char8_t dst[CC_UTF8_ENCODE_MAX]) {
@@ -488,7 +440,7 @@ static inline int utf8_encode_printable(char32_t cp, char8_t dst[CC_UTF8_ENCODE_
         break;
 
     default:
-        if(utf8_is_print(cp)) {
+        if(cc_is_print(cp)) {
             char8_t buf[CC_UTF8_ENCODE_MAX];
             if((err = utf8_encode(cp, buf)))
                 break;
@@ -572,6 +524,8 @@ static inline char *format(const char *fmt, ...) {
     return s;
 }
 
+__internal const char *action_to_string(enum cc_action_type a);
+
 struct cc_hashentry {
     const char *key;
     void *value;
@@ -600,11 +554,14 @@ __internal int hashtable_init(struct cc_hashtable *t, size_t cap);
 __internal void hashtable_free(struct cc_hashtable *t);
 
 __internal int hashtable_set(struct cc_hashtable *t, const char *k, void *v);
-__internal void *hashtable_get(struct cc_hashtable *t, const char *k);
+__internal void *hashtable_get(const struct cc_hashtable *t, const char *k);
 
 struct cc_grammar {
-    struct cc_hashtable parsers;
+    struct cc_hashtable rules;
 };
+
+__internal struct cc_grammar *grammar_init(size_t cap);
+__internal void grammar_free(struct cc_grammar *g);
 
 #endif /* CC_INTERNAL_H */
 

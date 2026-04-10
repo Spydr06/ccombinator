@@ -50,6 +50,7 @@ extern "C" {
 
 // regular structs used by ccombinator
 
+typedef struct cc_action cc_action_t;
 typedef struct cc_error cc_error_t;
 typedef struct cc_grammar cc_grammar_t;
 typedef struct cc_location cc_location_t;
@@ -62,6 +63,8 @@ typedef struct cc_source cc_source_t;
 typedef struct cc_result (*cc_lift_t)(void);
 typedef struct cc_result (*cc_fold_t)(size_t, void**);
 typedef struct cc_result (*cc_apply_t)(void*);
+
+typedef int (*cc_match_t)(char32_t);
 
 typedef struct cc_parser *(*cc_fix_t)(struct cc_parser*, void*);
 
@@ -188,7 +191,7 @@ struct cc_parser *cc_oneof(const char32_t chars[]);
 struct cc_parser *cc_noneof(const char32_t chars[]);
 
 // matches any character, for which the function `f` returns a non-zero value.
-struct cc_parser *cc_match(int (*f)(char32_t));
+struct cc_parser *cc_match(cc_match_t f);
 
 // matches the end of file.
 struct cc_parser *cc_eof(void);
@@ -408,6 +411,7 @@ enum cc_action_type {
     CC_ACTION_FOLD,
     CC_ACTION_APPLY,
     CC_ACTION_LIFT,
+    CC_ACTION_MATCH,
 };
 
 struct cc_action {
@@ -415,16 +419,36 @@ struct cc_action {
     const char *name;
 
     union {
+        void *value;
         cc_fold_t fold;
         cc_apply_t apply;
         cc_lift_t lift;
-        void *value;
+        cc_match_t match;
     };
 };
 
 #define CC_NULL_ACTION() ((struct cc_action){CC_ACTION_NULL, NULL, {NULL}})
-
 #define CC_ACTIONS(...) ((struct cc_action[]){ __VA_ARGS__ __VA_OPT__(,) CC_NULL_ACTION() })
+
+static inline struct cc_action cc_action_value(const char *name, void *value) {
+    return (struct cc_action){CC_ACTION_VALUE, name, {.value = value}};
+}
+
+static inline struct cc_action cc_action_fold(const char *name, cc_fold_t fold) {
+    return (struct cc_action){CC_ACTION_FOLD, name, {.fold = fold}};
+}
+
+static inline struct cc_action cc_action_apply(const char *name, cc_apply_t apply) {
+    return (struct cc_action){CC_ACTION_APPLY, name, {.apply = apply}};
+}
+
+static inline struct cc_action cc_action_lift(const char *name, cc_lift_t lift) {
+    return (struct cc_action){CC_ACTION_LIFT, name, {.lift = lift}};
+}
+
+static inline struct cc_action cc_action_match(const char *name, cc_match_t match) {
+    return (struct cc_action){CC_ACTION_MATCH, name, {.match = match}};
+}
 
 struct cc_grammar *cc_bnf_from(const struct cc_source *s, const struct cc_action actions[], struct cc_error **e);
 struct cc_grammar *cc_bnf(const char8_t *s, const struct cc_action actions[], struct cc_error **e);
@@ -435,9 +459,9 @@ struct cc_grammar *cc_bnf(const char8_t *s, const struct cc_action actions[], st
  * a `cc_grammar` represents a list of named `cc_parser`s
  */
 
-// returns a parser with the name `name` in the grammar `g`.
-// if no such parser is found, NULL is returned.
-struct cc_parser *cc_parser_by_name(const struct cc_grammar *g, const char *name);
+// returns the with the name `name` associated parser in the grammar `g`.
+// if no such parser is found, NULL is returned and errno set.
+struct cc_parser *cc_rule(const struct cc_grammar *g, const char *name);
 
 // frees a grammar object.
 // the reference-counts of all contained parsers is decreased.
@@ -463,6 +487,24 @@ int cc_close(struct cc_source *s);
 // if an internal error occurred, a non-zero ERRNO value is returned.
 // otherwise, `cc_parse` returns `0` and `r` contains the parsing result as either a value or an error report.
 int cc_parse(const struct cc_source *s, struct cc_parser *p, struct cc_result *r);
+
+/*
+ * Character matchers
+ */
+
+int cc_is_whitespace(char32_t c);
+int cc_is_blank(char32_t c);
+int cc_is_print(char32_t c);
+int cc_is_cntrl(char32_t c);
+int cc_is_graph(char32_t c);
+int cc_is_punct(char32_t c);
+int cc_is_digit(char32_t c);
+int cc_is_hexdigit(char32_t c);
+int cc_is_octdigit(char32_t c);
+int cc_is_alpha(char32_t c);
+int cc_is_lower(char32_t c);
+int cc_is_upper(char32_t c);
+int cc_is_alphanum(char32_t c);
 
 /*
  * Debugging
