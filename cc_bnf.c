@@ -479,7 +479,7 @@ static inline struct cc_parser *bnf_parser(void) {
     return cc_retain(__bnf_parser);
 }
 
-static int actions_table(struct cc_hashtable *t, const struct cc_action actions[]) {
+static int action_table_init(struct cc_hashtable *t, const struct cc_action actions[]) {
     memset(t, 0, sizeof(struct cc_hashtable));
 
     if(actions == NULL)
@@ -519,7 +519,7 @@ struct cc_grammar *cc_bnf_from(const struct cc_source *bnf_source, const struct 
     }
 
     struct cc_hashtable action_table;
-    if((errno = actions_table(&action_table, actions))) {
+    if((errno = action_table_init(&action_table, actions))) {
         cc_release(bnf);
         cc_grammar_free(g);
         return NULL;

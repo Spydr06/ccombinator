@@ -457,18 +457,6 @@ static inline int utf8_encode_printable(char32_t cp, char8_t dst[CC_UTF8_ENCODE_
 
 __internal struct cc_parser *parser_match(int (*f)(char32_t), const char *what);
 
-#define DYNARR_INIT { 0, 0, NULL }
-#define DYNARR_INIT_CAP 16
-
-struct dynarr {
-    size_t len;
-    size_t cap;
-    void **elems;
-};
-
-__internal int dynarr_append(struct dynarr *da, void *elem);
-__internal void dynarr_free(struct dynarr *da);
-
 #define STRING_BUFFER_INIT { 0, 0, NULL }
 #define STRING_BUFFER_INIT_CAP 128
 
@@ -526,15 +514,22 @@ static inline char *format(const char *fmt, ...) {
 
 __internal const char *action_to_string(enum cc_action_type a);
 
+#define HASHTABLE_MULTIPLIER 2
+#define HASHTABLE_MARKED ((struct cc_hashentry*) UINTPTR_MAX)
+
 struct cc_hashentry {
     const char *key;
     void *value;
+    struct cc_hashentry *next;
+    struct cc_hashentry *prev;
+    struct cc_hashentry *stack;
 };
 
 struct cc_hashtable {
     size_t capacity;
     size_t size;
-    struct cc_hashentry *entries;
+    struct cc_hashentry **entries;
+    struct cc_hashentry *head;
 };
 
 #define FNV_OFFSET 14695981039346656037ul
@@ -553,8 +548,18 @@ static inline size_t fnv_1a(const char* key) {
 __internal int hashtable_init(struct cc_hashtable *t, size_t cap);
 __internal void hashtable_free(struct cc_hashtable *t);
 
+__internal int hashtable_iter(const struct cc_hashtable *t, int (*f)(const char *k, void *v, void *userp), void *userp);
+
 __internal int hashtable_set(struct cc_hashtable *t, const char *k, void *v);
 __internal void *hashtable_get(const struct cc_hashtable *t, const char *k);
+
+__internal void *hashtable_remove(struct cc_hashtable *t, const char *k);
+
+__internal int hashtable_push(struct cc_hashtable *t, const char *k, void *v);
+__internal void *hashtable_pop(struct cc_hashtable *t);
+
+__internal const char* hashtable_head_key(struct cc_hashtable *t);
+__internal void *hashtable_head_value(struct cc_hashtable *t);
 
 struct cc_grammar {
     struct cc_hashtable rules;

@@ -216,31 +216,6 @@ struct cc_error *cc_with_received(struct cc_error *e, char32_t received) {
     return e;
 }
 
-int dynarr_append(struct dynarr *da, void *elem) {
-    if(!da)
-        return EINVAL;
-
-    if(da->len + 1 > da->cap) {
-        size_t new_cap = MAX(da->cap * 2, DYNARR_INIT_CAP);
-
-        void *new_elems = realloc(da->elems, new_cap * sizeof(void*));
-        if(!new_elems)
-            return errno;
-
-        da->elems = new_elems;
-        da->cap = new_cap;
-    }
-
-    da->elems[da->len++] = elem;
-
-    return 0;
-}
-
-void dynarr_free(struct dynarr *da) {
-    free(da->elems);
-    memset(da, 0, sizeof(struct dynarr));
-}
-
 int string_buffer_append(struct string_buffer *sb, const char *fmt, ...) {
     if(!sb || !fmt)
         return EINVAL;
@@ -542,9 +517,9 @@ int hashtable_init(struct cc_hashtable *t, size_t cap) {
         return EINVAL;
 
     memset(t, 0, sizeof(struct cc_hashtable));
-    t->capacity = cap;
+    t->capacity = cap * HASHTABLE_MULTIPLIER;
 
-    if(!(t->entries = calloc(cap, sizeof(struct cc_hashentry))))
+    if(!(t->entries = calloc(t->capacity, sizeof(struct cc_hashentry*))))
         return errno;
 
     return 0;
@@ -554,58 +529,106 @@ void hashtable_free(struct cc_hashtable *t) {
     if(!t)
         return;
 
+    for(size_t i = 0; i < t->capacity; i++) {
+        if(t->entries[i] == HASHTABLE_MARKED)
+            continue;
+
+        struct cc_hashentry *next = t->entries[i];
+        while(next) {
+            struct cc_hashentry *curr = next;
+            next = curr->stack;
+            free(curr);
+        }
+    }
     free(t->entries);
 }
 
-static int hashtable_insert(struct cc_hashtable *t, const char *k, void *v) {
-    size_t i = fnv_1a(k) % t->capacity;
-    // linear probing
-    while(t->entries[i].key) {
-        if(strcmp(t->entries[i].key, k) == 0)
-            return EEXIST;
-        i = (i + 1) % t->capacity;
-    }
+int hashtable_iter(const struct cc_hashtable *t, int (*f)(const char *k, void *v, void *userp), void *userp) {
+    int res;
 
-    t->entries[i].key = k;
-    t->entries[i].value = v;
+    for(struct cc_hashentry *entry = t->head; entry; entry = entry->next) {
+        if((res = f(entry->key, entry->value, userp)))
+            return res;
+    }
 
     return 0;
 }
 
-static int hashtable_expand(struct cc_hashtable *t) {
-    struct cc_hashentry *new_entries = calloc(t->capacity * 2, sizeof(struct cc_hashentry));
+static struct cc_hashentry **hashtable_get_slot(const struct cc_hashtable *t, const char *k, bool skip_marked) {
+    size_t hash = fnv_1a(k);
+
+    // linear probing
+    for(size_t i = 0; i < t->capacity; i++) {
+        size_t index = (i + hash) % t->capacity;
+        if(!t->entries[index] || (!skip_marked && t->entries[index] == HASHTABLE_MARKED) || strcmp(t->entries[index]->key, k) == 0)
+            return t->entries + index;
+    }
+
+    return NULL;
+}
+
+static int hashtable_resize(struct cc_hashtable *t) {
+    size_t new_capacity = t->capacity * HASHTABLE_MULTIPLIER;
+
+    struct cc_hashentry **new_entries = calloc(new_capacity, sizeof(struct cc_hashentry*));
     if(!new_entries)
         return errno;
 
-    struct cc_hashentry *old_entries = t->entries;
-    size_t old_cap = t->capacity;
+    size_t old_capacity = t->capacity;
+    struct cc_hashentry **old_entries = t->entries; 
 
-    t->capacity = t->capacity * 2;
+    t->capacity = new_capacity;
     t->entries = new_entries;
 
-    for(size_t i = 0; i < old_cap; i++) {
-        if(old_entries[i].key)
-            hashtable_insert(t, old_entries[i].key, old_entries[i].value);
+    for(size_t i = 0; i < old_capacity; i++) {
+        if(!old_entries[i] || old_entries[i] == HASHTABLE_MARKED)
+            continue;
+
+        struct cc_hashentry **slot = hashtable_get_slot(t, old_entries[i]->key, false);
+        assert(slot != NULL);
+
+        *slot = old_entries[i];
     }
 
-    free(old_entries);
     return 0;
 }
 
-int hashtable_set(struct cc_hashtable *t, const char *k, void *v) {
+static int hashtable_insert(struct cc_hashtable *t, const char *k, void *v, bool allow_duplicate) {
     if(!t || !k)
         return EINVAL;
 
     int err;
-
-    if(t->size > t->capacity / 2 && (err = hashtable_expand(t)))
+    if(t->size * HASHTABLE_MULTIPLIER >= t->capacity && (err = hashtable_resize(t)))
         return err;
 
-    if((err = hashtable_insert(t, k, v)))
-        return err;
+    struct cc_hashentry **slot = hashtable_get_slot(t, k, false);
+    assert(slot != NULL);
 
+    if(!allow_duplicate && *slot && *slot != HASHTABLE_MARKED)
+        return EEXIST;
+
+    struct cc_hashentry *entry = malloc(sizeof(struct cc_hashentry));
+    if(!entry)
+        return errno;
+
+    entry->key = k;
+    entry->value = v;
+    entry->next = t->head;
+    entry->prev = NULL;
+    if(entry->next)
+        entry->next->prev = entry;
+    entry->stack = *slot == HASHTABLE_MARKED ? NULL : *slot;
+
+    *slot = entry;
+    
     t->size++;
+    t->head = entry;
+    
     return 0;
+}
+
+int hashtable_set(struct cc_hashtable *t, const char *k, void *v) {
+    return hashtable_insert(t, k, v, false);
 }
 
 void *hashtable_get(const struct cc_hashtable *t, const char *k) {
@@ -614,14 +637,67 @@ void *hashtable_get(const struct cc_hashtable *t, const char *k) {
         return NULL;
     }
 
-    // linear probing
-    for(size_t i = fnv_1a(k) % t->capacity; t->entries[i].key; i = (i + 1) % t->capacity) {
-        if(strcmp(t->entries[i].key, k) == 0)
-            return t->entries[i].value;
+    struct cc_hashentry **slot = hashtable_get_slot(t, k, true);
+    if(!slot || !*slot) {
+        errno = ENOENT;
+        return NULL;
     }
 
-    errno = ENOENT;
-    return NULL;
+    return (*slot)->value;
+}
+
+int hashtable_push(struct cc_hashtable *t, const char *k, void *v) {
+    return hashtable_insert(t, k, v, true);
+}
+
+void *hashtable_remove(struct cc_hashtable *t, const char *k) {
+    if(!t || !k) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    struct cc_hashentry **slot = hashtable_get_slot(t, k, true);
+    if(!slot || !*slot) {
+        errno = ENOENT;
+        return NULL;
+    }
+
+    struct cc_hashentry *entry = *slot;
+
+    if(entry->stack)
+        *slot = entry->stack;
+    else {
+        *slot = HASHTABLE_MARKED; // does not break linear probing
+        t->size--;
+    }
+
+    if(t->head == entry)
+        t->head = entry->next;
+    if(entry->next)
+        entry->next->prev = entry->prev;
+    if(entry->prev)
+        entry->prev->next = entry->next;
+
+    void *value = entry->value;
+    free(entry);
+    return value;
+}
+
+void *hashtable_pop(struct cc_hashtable *t) {
+    if(!t->head) {
+        errno = ENOENT;
+        return NULL;
+    }
+
+    return hashtable_remove(t, t->head->key);
+}
+
+const char* hashtable_head_key(struct cc_hashtable *t) {
+    return t->head ? t->head->key : NULL;
+}
+
+void *hashtable_head_value(struct cc_hashtable *t) {
+    return t->head ? t->head->value : NULL;
 }
 
 struct cc_grammar *grammar_init(size_t cap) {
@@ -630,7 +706,7 @@ struct cc_grammar *grammar_init(size_t cap) {
         return NULL;
 
     int err;
-    if((err = hashtable_init(&g->rules, cap * 2))) {
+    if((err = hashtable_init(&g->rules, cap))) {
         errno = err;
         return NULL;
     }
@@ -638,20 +714,31 @@ struct cc_grammar *grammar_init(size_t cap) {
     return g;
 }
 
+static int free_rule(const char *k, void *v, void*) {
+    free((void*) k);
+    cc_release(v);
+
+    return 0;
+}
+
 void cc_grammar_free(struct cc_grammar *g) {
     if(!g)
         return;
 
-    for(size_t i = 0; i < g->rules.capacity; i++) {
-        if(!g->rules.entries[i].key)
-            continue;
-
-        free((void*) g->rules.entries[i].key);
-        cc_release(g->rules.entries[i].value);
-    }
+    hashtable_iter(&g->rules, free_rule, NULL);
 
     hashtable_free(&g->rules);
     free(g);
+}
+
+static int bind_rule(const char *k, void *v, void *userp) {
+    struct cc_parser **p = userp;
+
+    struct cc_parser *bind = cc_bind(k, cc_retain(v), *p);
+    if(!bind)
+        return -1;
+    *p = bind;
+    return 0;
 }
 
 struct cc_parser *cc_rule(const struct cc_grammar *g, const char *name) {
@@ -668,13 +755,8 @@ struct cc_parser *cc_rule(const struct cc_grammar *g, const char *name) {
     if(!p)
         return NULL;
 
-    for(size_t i = 0; i < g->rules.capacity; i++) {
-        if(!g->rules.entries[i].key)
-            continue;
-
-        if(!(p = cc_bind(g->rules.entries[i].key, cc_retain(g->rules.entries[i].value), p)))
-            return NULL;
-    }
+    if(hashtable_iter(&g->rules, bind_rule, &p))
+        return NULL;
 
     return p;
 }

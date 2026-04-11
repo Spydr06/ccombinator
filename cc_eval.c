@@ -10,6 +10,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#define SCOPE_INIT_CAP 16
+
 #define CC_STATE_FLAGS_DEFAULT  0x00
 #define CC_STATE_FLAG_EOF       0x01
 #define CC_STATE_FLAG_NOERROR   0x02
@@ -25,7 +27,7 @@ struct cc_state {
     const struct cc_source *src;
     struct cc_location loc;
 
-    struct dynarr scope;
+    struct cc_hashtable scope;
 };
 
 static inline bool is_sof(struct cc_state *s) {
@@ -64,31 +66,29 @@ static inline char32_t peek_at(struct cc_state *s) {
     return utf8_first_cp(s->src->buffer + s->loc.byte_off);
 }
 
+static inline int state_init(struct cc_state *s) {
+    memset(s, 0, sizeof(struct cc_state));
+
+    s->flags = CC_STATE_FLAGS_DEFAULT;
+    s->loc = CC_LOCATION_DEFAULT;
+
+    return hashtable_init(&s->scope, SCOPE_INIT_CAP);
+}
+
 static inline void state_free(struct cc_state *s) {
-    dynarr_free(&s->scope);
+    hashtable_free(&s->scope);
 }
 
-static inline int scope_push(struct cc_state *s, struct cc_binding *b) {
-    return dynarr_append(&s->scope, (void*) b);
+static inline int scope_push(struct cc_state *s, struct cc_binding *binding) {
+    return hashtable_push(&s->scope, binding->name, binding->p);
 }
 
-static inline struct cc_binding *scope_pop(struct cc_state *s) {
-    assert(s->scope.len > 0);
-
-    return s->scope.elems[--s->scope.len];
+static inline struct cc_parser *scope_pop(struct cc_state *s) {
+    return hashtable_pop(&s->scope);
 }
 
 static struct cc_parser *scope_lookup(struct cc_state *s, const char *name) {
-    // TODO: maybe use some sort of hashing to avoid strcmp?
-
-    for(size_t i = s->scope.len; i > 0; i--) {
-        const struct cc_binding *bind = s->scope.elems[i - 1];
-
-        if(strcmp(bind->name, name) == 0)
-            return bind->p;
-    }
-
-    return NULL;
+    return hashtable_get(&s->scope, name);
 }
 
 static int new_error(struct cc_error *e, struct cc_state *s, const char *msg, bool copy) {
@@ -383,7 +383,7 @@ static uint32_t data_pop(struct data_stack *st) {
     return st->data[--st->count];
 }
 
-struct call {
+struct frame {
     struct cc_parser *parser;
     uint32_t ip;
     uint32_t sp;
@@ -391,19 +391,19 @@ struct call {
     struct cc_location loc;
 };
 
-struct call_stack {
+struct frame_stack {
     size_t capacity;
     size_t count;
-    struct call *items;
+    struct frame *items;
 };
 
 #define CALL_STACK_INIT {0, 0, NULL}
 #define CALL_STACK_INIT_CAP 128
 
-static int call_push(struct call_stack *st, struct call call) {
+static int frame_push(struct frame_stack *st, struct frame call) {
     if(st->count + 1 > st->capacity) {
         size_t new_capacity = MAX(st->capacity * 2, CALL_STACK_INIT_CAP);
-        void *new = realloc(st->items, new_capacity * sizeof(struct call));
+        void *new = realloc(st->items, new_capacity * sizeof(struct frame));
         if(!new)
             return errno;
 
@@ -415,7 +415,7 @@ static int call_push(struct call_stack *st, struct call call) {
     return 0;
 }
 
-static struct call call_pop(struct call_stack *st) {
+static struct frame frame_pop(struct frame_stack *st) {
     assert(st->count > 0);
     return st->items[--st->count];
 }
@@ -573,7 +573,7 @@ cleanup:
 static int ir_eval(struct cc_state *s, struct cc_parser *p, struct cc_result *r) {
     struct data_stack data_stack = DATA_STACK_INIT;
     struct result_stack result_stack = RESULT_STACK_INIT;
-    struct call_stack call_stack = CALL_STACK_INIT;
+    struct frame_stack call_stack = CALL_STACK_INIT;
 
     int err;
     uint32_t call_success = PARSE_SUCCESS;
@@ -582,7 +582,7 @@ static int ir_eval(struct cc_state *s, struct cc_parser *p, struct cc_result *r)
         return -errno;
     memset(r->err, 0, sizeof(struct cc_error));
 
-    if((err = call_push(&call_stack, (struct call){
+    if((err = frame_push(&call_stack, (struct frame){
         .parser = p,
         .ip = 0,
         .sp = 0,
@@ -591,7 +591,7 @@ static int ir_eval(struct cc_state *s, struct cc_parser *p, struct cc_result *r)
         goto cleanup;
 
     while(call_stack.count > 0) {
-        struct call *t = &call_stack.items[call_stack.count - 1];
+        struct frame *t = &call_stack.items[call_stack.count - 1];
         call_success = PARSE_SUCCESS;
 
         // resolve parser lookups directly
@@ -713,7 +713,7 @@ static int ir_eval(struct cc_state *s, struct cc_parser *p, struct cc_result *r)
         case IR_CALL:
             assert(t->parser->ir->count - t->ip >= sizeof(uintptr_t));
             
-            if((err = call_push(&call_stack, (struct call){
+            if((err = frame_push(&call_stack, (struct frame){
                 .parser = (struct cc_parser*) ir_read_ptr(t->parser->ir, t->ip), // call destination
                 .sp = data_stack.count,     // save stack pointer
                 .rp = result_stack.count,   // save result pointer
@@ -741,7 +741,7 @@ static int ir_eval(struct cc_state *s, struct cc_parser *p, struct cc_result *r)
             }
 
             data_stack.count = t->sp;   // restore stack pointer
-            call_pop(&call_stack);      // return to caller
+            frame_pop(&call_stack);     // return to caller
                 
             if((err = data_push(&data_stack, call_success)))
                 goto cleanup;
@@ -805,7 +805,7 @@ static int ir_eval(struct cc_state *s, struct cc_parser *p, struct cc_result *r)
 
         case IR_POP_BINDING:
             assert(t->parser->type == PARSER_BIND);
-            if(scope_pop(s) != t->parser->match.bind.binding) {
+            if(scope_pop(s) != t->parser->match.bind.binding->p) {
                 assert(false && "scope stack corrupt");
                 unreachable();
             }
@@ -905,17 +905,15 @@ int cc_parse(const struct cc_source *src, struct cc_parser *p, struct cc_result 
         memset(r, 0, sizeof(struct cc_result));
     
     int err = 0;
+    struct cc_state s;
+    if((err = state_init(&s)))
+        goto cleanup;
     
     if(!src || !p || !r) {
         err = EINVAL;
         goto cleanup;
     }
 
-    struct cc_state s;
-    memset(&s, 0, sizeof(struct cc_state));
-
-    s.flags = CC_STATE_FLAGS_DEFAULT;
-    s.loc = CC_LOCATION_DEFAULT;
     s.src = src;
     
     r->err = NULL;
