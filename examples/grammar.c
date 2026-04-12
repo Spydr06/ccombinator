@@ -13,6 +13,7 @@ static struct cc_result fold_assign(size_t n, void **vs) {
     printf("assing '%s' <- '%s'\n", (char*) vs[0], (char*) vs[4]);
 
     free(vs[0]);
+    free(vs[2]);
     free(vs[4]);
     return cc_ok(NULL);
 }

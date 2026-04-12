@@ -169,6 +169,7 @@ static struct cc_result bnf_repetition(size_t n, void **vs) {
         return cc_err(e);
     }
 
+    free(action_name);
     return cc_ok(cc_many(action->fold, inner));
 }
 
@@ -202,6 +203,7 @@ static struct cc_result bnf_application(size_t n, void **vs) {
         return cc_err(e);
     }
 
+    free(action_name);
     return cc_ok(cc_apply(inner, action->apply));
 }
 
@@ -223,10 +225,13 @@ static struct cc_result bnf_lift(size_t n, void **vs) {
 
     switch(action->type) {
     case CC_ACTION_LIFT:
+        free(action_name);
         return cc_ok(cc_lift(action->lift));
     case CC_ACTION_VALUE:
+        free(action_name);
         return cc_ok(cc_lift_val(action->value));
     case CC_ACTION_MATCH:
+        free(action_name);
         return cc_ok(cc_match(action->match));
     default:
         struct cc_error *e = cc_errorf("action '@%s' is not of type 'lift' or 'value', got '%s'", action_name, action_to_string(action->type));
@@ -289,6 +294,8 @@ static struct cc_result bnf_fold_concatenation(size_t n, void **vs) {
         cc_release(inner);
         return cc_err(e);
     }
+
+    free(action_name);
 
     if(inner->type != PARSER_AND && inner->type != PARSER_SEQ)
         return cc_ok(cc_and(1, action->fold, inner));

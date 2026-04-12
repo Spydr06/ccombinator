@@ -446,6 +446,26 @@ __internal struct cc_lazy *result_top(struct result_stack *st) {
     return st->items[st->count - 1];
 }
 
+static void remove_patched_values(struct result_stack *result_stack, struct data_stack *data_stack) {
+    size_t j = data_stack->count;
+    for(size_t i = result_stack->count; i > 0; i--) {
+        switch(result_stack->items[i - 1]->type) {
+        case LAZY_APPLY:
+            assert(j > 0);
+            LAZY_DOWNCAST(result_stack->items[i - 1], struct cc_lazy_apply)->value = NULL;
+            j--;
+            break;
+        case LAZY_FOLD:
+            assert(j > 0);
+            size_t state = data_stack->data[--j];
+            if(state > 0)
+                memset(LAZY_DOWNCAST(result_stack->items[i - 1], struct cc_lazy_fold)->values, 0, (state - 1) * sizeof(struct cc_lazy*));
+        default:
+            break;
+        }
+    }
+}
+
 static int lazy_eval(struct cc_state *s, struct result_stack *result_stack, struct data_stack *data_stack, struct cc_result *result) {
     assert(result_stack->count == 1 && "no result left on stack");
     data_stack->count = 0;
@@ -514,6 +534,7 @@ static int lazy_eval(struct cc_state *s, struct result_stack *result_stack, stru
                     goto cleanup;
                 if(lazy_is_recursive(fold->values[state]) && (err = data_push(data_stack, 0u)))
                     goto cleanup;  
+                fold->values[state] = NULL;
                 continue;
             }
 
@@ -534,10 +555,10 @@ static int lazy_eval(struct cc_state *s, struct result_stack *result_stack, stru
                     goto cleanup;
                 if(lazy_is_recursive(apply->value) && (err = data_push(data_stack, 0u)))
                     goto cleanup;
+                apply->value = NULL;
                 continue;
             case 1:
                 *result = apply->apply(result->out); 
-                apply->value = NULL;
                 break;
             default:
                 assert(false && "invalid apply state");
@@ -550,19 +571,21 @@ static int lazy_eval(struct cc_state *s, struct result_stack *result_stack, stru
             unreachable();
         }
 
+        struct cc_location location = lazy->location;
+
+        if((err = lazy_free(result_pop(result_stack), result_stack)))
+            goto cleanup;
+
         if(result->err) {
             cc_with_filename(result->err, s->src->origin);
-            cc_with_location(result->err, lazy->location);
+            cc_with_location(result->err, location);
 
-            // FIXME:
-            // result_stack->count = 0;
+            // remove patched values, so they don't get freed accidentally
+            remove_patched_values(result_stack, data_stack);
 
             res = PARSE_FAILURE;
             goto cleanup;
         }
-
-        if((err = lazy_free(result_pop(result_stack), result_stack)))
-            goto cleanup;
     }
 
     assert(data_stack->count == 0 && "data stack is not empty");
